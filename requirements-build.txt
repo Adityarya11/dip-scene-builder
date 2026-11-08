@@ -1,0 +1,7 @@
+# Extra packages for the OFFLINE pipeline (Colab / Kaggle): src.data, src.build, src.eval
+-r requirements.txt
+requests
+tqdm
+matplotlib
+rembg
+onnxruntime-gpu   # falls back to CPU automatically if no GPU; use plain `onnxruntime` on CPU-only machines

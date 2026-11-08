@@ -1,0 +1,11 @@
+# Runtime dependencies of the Gradio app (Hugging Face Space, CPU)
+--extra-index-url https://download.pytorch.org/whl/cpu
+gradio>=4.44
+numpy
+pandas
+pillow
+opencv-python-headless
+scikit-learn
+scikit-image
+torch
+open_clip_torch
