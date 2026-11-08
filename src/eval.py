@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.compose import Library, compose, item_card
 from src.index import Index
 
 FIG = Path("results/figures")
@@ -107,6 +108,57 @@ def fig_masks(data, art, meta, n=6):
     fig.tight_layout(); fig.savefig(FIG / "fig2_masks_iou.png", dpi=150); plt.close(fig)
 
 
+
+# ------------------------------------------------------------------ scene-level evaluation
+PROMPTS5 = ["cozy reading corner", "modern living room", "minimalist home office", "rustic dining room", "bright bedroom"]
+PROMPTS_ALL = PROMPTS5 + ["elegant entryway", "scandinavian living room", "colorful reading nook", "dark moody home office",
+                          "vintage dining room", "calm bedroom", "boho living room", "industrial home office"]
+
+
+def evaluate_scenes(lib, prompts=PROMPTS_ALL):
+    """Harmony ON vs OFF over many prompts: palette-compatibility score, hue spread, CLIP relevance, timing.
+    NOTE: harmony-ON directly maximises the compatibility score, so its improvement is partly by construction;
+    hue spread and CLIP relevance are reported as a sanity check (what does harmony cost / achieve elsewhere?)."""
+    from src.palette import harmony_score, hue_spread
+    rows = []
+    for p in prompts:
+        for h in (False, True):
+            r = compose(lib, p, h)
+            ids = r["ids"]
+            q = lib.encode([f"a photo of a {r['style']} {sl['q']}".replace("  ", " ") for sl in r["slots"]])
+            rel = float(np.mean([lib.emb[i] @ qv for i, qv in zip(ids, q)]))
+            rows.append(dict(prompt=p, harmony=h, compat=harmony_score([lib.summ[i] for i in ids]),
+                             hue_spread_deg=hue_spread([lib.pal_lab[i] for i in ids], [lib.pal_w[i] for i in ids]),
+                             clip_relevance=rel, seconds=r["seconds"]))
+    df = pd.DataFrame(rows)
+    df.to_csv("results/scene_eval.csv", index=False)
+    g = df.groupby("harmony")[["compat", "hue_spread_deg", "clip_relevance", "seconds"]].mean()
+    return {"per_setting_mean": {("on" if k else "off"): v for k, v in g.to_dict("index").items()},
+            "n_prompts": len(prompts),
+            "median_seconds_per_scene": float(df.seconds.median())}
+
+
+def fig_harmony(lib, prompts=PROMPTS5):
+    """Figure 4: same prompt, harmony OFF (left) vs ON (right)."""
+    fig, ax = plt.subplots(len(prompts), 2, figsize=(9, 3.1 * len(prompts)))
+    for r, p in enumerate(prompts):
+        for c, h in enumerate((False, True)):
+            res = compose(lib, p, h)
+            ax[r, c].imshow(res["image"]); ax[r, c].axis("off")
+            ax[r, c].set_title(f"{p} - harmony {'ON' if h else 'OFF'}  (score {res['harmony']:.2f})", fontsize=9)
+    fig.tight_layout(); fig.savefig(FIG / "fig4_harmony_on_off.png", dpi=130); plt.close(fig)
+
+
+def fig_palettes(lib, prompt="cozy reading corner"):
+    """Figure 5: chosen items with their k-means palette swatches (harmony ON)."""
+    res = compose(lib, prompt, True)
+    fig, ax = plt.subplots(1, len(res["ids"]), figsize=(2.6 * len(res["ids"]), 3.2))
+    for a, i, sl in zip(ax, res["ids"], res["slots"]):
+        a.imshow(item_card(lib, i, 220)); a.axis("off"); a.set_title(sl["q"], fontsize=9)
+    fig.suptitle(f"Dominant-colour palettes (k-means in LAB) - '{prompt}'")
+    fig.tight_layout(); fig.savefig(FIG / "fig5_palettes.png", dpi=150); plt.close(fig)
+
+
 def run(data, art, make_figs=True, clip_text_eval=True):
     art = Path(art); Path("results").mkdir(exist_ok=True); FIG.mkdir(parents=True, exist_ok=True)
     meta = pd.read_csv(art / "meta.csv")
@@ -120,10 +172,18 @@ def run(data, art, make_figs=True, clip_text_eval=True):
     out = {"ndcg10_image_query": table}
     if "clip" in feats and clip_text_eval:
         from src.features import load_clip
-        t = eval_text(feats["clip"], meta.category, load_clip())
+        clip = load_clip()
+        t = eval_text(feats["clip"], meta.category, clip)
         out["ndcg10_clip_text_query"] = {"mean": float(np.mean(list(t.values()))), **t}
+        if (art / "palettes.npz").exists():
+            lib = Library(art, clip)
+            out["scenes"] = evaluate_scenes(lib)
+            if make_figs:
+                fig_harmony(lib); fig_palettes(lib)
     df.round(4).to_csv("results/ndcg_table.csv")
     out["n_items"] = len(meta)
+    out["segmentation"] = {"mean_iou_classical_vs_rembg": float(meta.iou_classical_vs_rembg.mean()),
+                           "note": "rembg is pseudo ground truth"}
     json.dump(out, open("results/metrics.json", "w"), indent=2, default=float)
     print(df.round(3).to_string())
     if make_figs:
