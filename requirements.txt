@@ -1,6 +1,6 @@
 # Runtime dependencies of the Gradio app (Hugging Face Space, CPU)
 --extra-index-url https://download.pytorch.org/whl/cpu
-gradio>=4.44
+gradio
 numpy
 pandas
 pillow
