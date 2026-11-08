@@ -5,6 +5,8 @@
 (b) rembg      : U2-Net deep model (pre-trained). We use it as *pseudo* ground truth,
                  NOT as true ground truth (ABO small images come without masks).
 """
+import os
+
 import cv2
 import numpy as np
 
@@ -64,7 +66,7 @@ def rembg_mask(img):
     global _session
     from rembg import new_session, remove
     if _session is None:
-        _session = new_session("u2netp")      # light U2-Net variant, fine on free CPU / T4
+        _session = new_session(os.environ.get("REMBG_MODEL", "u2net"))   # "u2net" (176MB) on Colab; "u2netp" (4MB) for quick local tests
     a = np.array(remove(img, session=_session, only_mask=True))
     return ((a > 127) * 255).astype(np.uint8)
 

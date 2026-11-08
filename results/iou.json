@@ -1,0 +1,16 @@
+{
+  "n": 48,
+  "mean_iou": 0.6661901500562252,
+  "mean_iou_per_category": {
+    "chair": 0.7597,
+    "lamp": 0.7131,
+    "plant_vase": 0.7241,
+    "rug": 0.4387,
+    "shelf": 0.6564,
+    "sofa": 0.7515,
+    "table": 0.6591,
+    "wall_art": 0.627
+  },
+  "grabcut_fallback_fraction": 0.1875,
+  "note": "rembg (U2-Net) is PSEUDO ground truth, not human-annotated"
+}

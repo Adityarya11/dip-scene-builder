@@ -28,7 +28,7 @@ def denoise(img, median_k=3, sigma=0.8):
     return cv2.GaussianBlur(img, (0, 0), sigma)
 
 
-def gray_world(img, bg_thresh=235):
+def gray_world(img, bg_thresh=235, strength=0.5):
     """Gray-world white balance: scale each channel so the *object* average becomes gray.
     Product photos have a big white background that would bias the mean, so pixels
     that are almost white (min channel > bg_thresh) are ignored when computing the gains."""
@@ -38,7 +38,9 @@ def gray_world(img, bg_thresh=235):
         return img
     means = f[fg].mean(axis=0)              # mean R, G, B of foreground pixels
     gains = means.mean() / np.maximum(means, 1e-3)
-    gains = np.clip(gains, 0.75, 1.33)      # avoid extreme colour casts
+    # Full gray-world turns e.g. beige chairs blue (the object really IS beige), so we apply
+    # only half of the correction and clip it: a compromise between fixing casts and product fidelity.
+    gains = np.clip(1 + strength * (gains - 1), 0.85, 1.18)
     return np.clip(f * gains, 0, 255).astype(np.uint8)
 
 

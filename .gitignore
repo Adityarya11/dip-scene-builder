@@ -13,3 +13,6 @@ wheels/
 data/
 data_test/
 .ipynb_checkpoints/
+artifacts/masks/
+artifacts_test/
+results_test/
