@@ -75,7 +75,7 @@ Figures are produced automatically in `results/figures/`:
 | NDCG@10 CLIP text query | 0.903 mean; 1.0 for 6 of 8 categories, plant_vase 0.78, wall_art 0.45 (the phrase "wall art" is a weak CLIP query) |
 | Mean IoU classical vs rembg | 0.672 over 1485 items. Per category: sofa 0.87, chair 0.79, plant_vase 0.76, table 0.74, shelf 0.69, lamp 0.68, wall_art 0.56, rug 0.32 (`results/iou.json`) |
 | GrabCut/full-frame fallback fraction | 11.6 % |
-| Compatibility score harmony OFF vs ON | 0.914 vs 0.950 (13 prompts; ON reaches 0.95 in 13/13, OFF is lower in 7/13) |
+| Compatibility score harmony OFF vs ON | 0.914 vs 0.950 (13 prompts; ON is 0.945-0.955 on every prompt; OFF is strictly lower on 6 of 13 prompts and equal on the other 7) |
 | Hue spread OFF vs ON; CLIP relevance OFF vs ON | 17.0 deg vs 10.8 deg; 0.3071 vs 0.3065 (harmony costs almost no text relevance) |
 | Median seconds per scene (CPU) | 0.51 s (0.48 OFF, 0.68 ON) on the dev laptop |
 
