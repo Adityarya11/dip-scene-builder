@@ -66,7 +66,8 @@ def load_candidates(raw: Path):
                 e = json.loads(line)
                 cat = CATEGORY_MAP.get(e.get("product_type", [{}])[0].get("value"))
                 cap = english_title(e)
-                if cat and cap and e.get("main_image_id"):
+                # skip fabric/material swatch listings (not products, but ABO files them under chair/sofa)
+                if cat and cap and e.get("main_image_id") and "swatch" not in cap.lower():
                     rows.append((e["item_id"], e["main_image_id"], cat, cap))
     return pd.DataFrame(rows, columns=["item_id", "image_id", "category", "caption"]).drop_duplicates("image_id")
 

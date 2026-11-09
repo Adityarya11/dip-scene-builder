@@ -51,13 +51,13 @@ Key design choices, each explainable in one sentence:
 
 ## 4. Experiments
 
-* **Data.** 8 categories (sofa, chair, table, lamp, rug, plant_vase, shelf, wall_art), 190 images each, **[fill: n]** images in total. Seed 0.
+* **Data.** 8 categories (sofa, chair, table, lamp, rug, plant_vase, shelf, wall_art), 190 images each, 1485 images in total (35 fabric-swatch listings were removed with `src/clean.py`). Seed 0.
 * **Retrieval.** Leave-one-out image query, relevance = same category, NDCG@10 for HSV, HOG, LBP, CLIP. Extra row: CLIP text query
   "a photo of a <category>".
 * **Segmentation.** IoU between the classical mask and the rembg mask over all images. rembg is *pseudo* ground truth.
 * **Scene generation.** 13 prompts, each rendered with harmony OFF and ON. Reported: compatibility score, hue spread (circular std. of all palette hues),
   mean CLIP relevance of the chosen items, seconds per scene on CPU.
-* **Hardware.** Offline run on Colab/Kaggle T4; scene timing on CPU **[fill: machine]**.
+* **Hardware.** Offline run on Colab/Kaggle T4; scene timing on CPU Windows 11 laptop CPU.
 
 ## 5. Results
 
@@ -71,19 +71,18 @@ Figures are produced automatically in `results/figures/`:
 
 | Result | Value |
 |---|---|
-| NDCG@10 HSV / HOG / LBP / CLIP | **[fill]** (`results/ndcg_table.csv`) |
-| NDCG@10 CLIP text query | **[fill]** |
-| Mean IoU classical vs rembg | **[fill]** (`results/iou.json`), per category in the same file |
-| Grabcut fallback fraction | **[fill]** |
-| Compatibility score harmony OFF vs ON | **[fill]** (`results/scene_eval.csv`) |
-| Hue spread OFF vs ON, CLIP relevance OFF vs ON | **[fill]** |
-| Median seconds per scene (CPU) | **[fill]** |
+| NDCG@10 HSV / HOG / LBP / CLIP | 0.341 / 0.675 / 0.696 / 0.856 (`results/ndcg_table.csv`). Weakest categories: shelf (CLIP 0.70) and table (0.78) |
+| NDCG@10 CLIP text query | 0.903 mean; 1.0 for 6 of 8 categories, plant_vase 0.78, wall_art 0.45 (the phrase "wall art" is a weak CLIP query) |
+| Mean IoU classical vs rembg | 0.672 over 1485 items. Per category: sofa 0.87, chair 0.79, plant_vase 0.76, table 0.74, shelf 0.69, lamp 0.68, wall_art 0.56, rug 0.32 (`results/iou.json`) |
+| GrabCut/full-frame fallback fraction | 11.6 % |
+| Compatibility score harmony OFF vs ON | 0.914 vs 0.950 (13 prompts; ON reaches 0.95 in 13/13, OFF is lower in 7/13) |
+| Hue spread OFF vs ON; CLIP relevance OFF vs ON | 17.0 deg vs 10.8 deg; 0.3071 vs 0.3065 (harmony costs almost no text relevance) |
+| Median seconds per scene (CPU) | 0.51 s (0.48 OFF, 0.68 ON) on the dev laptop |
 
 **How to read them (write after seeing the numbers).** Expect CLIP to beat the hand-crafted features on category retrieval because
 HSV/HOG/LBP see colour, edges or texture but not object identity; check whether this holds. State clearly that NDCG is category-based, so the harmony
 re-ranking does not change it by design. Harmony is evaluated with the palette score, and because harmony-ON optimises that same score the gain is partly by
-construction; use hue spread and the CLIP relevance drop as a second view. In a 48-image smoke test the scores were all close to 0.95 because most items were
-neutral, so report the full-run values rather than that test.
+construction; use hue spread and the CLIP relevance drop as a second view. The score saturates at 0.95 (the neutral-pair value), so prompts whose OFF choice already has neutral colours show no change.
 
 ## 6. Failure cases (examples to find in the figures and describe)
 
@@ -108,3 +107,9 @@ neutral, so report the full-run values rather than that test.
 ## References
 
 See the Credits section of `README.md`.
+
+## Appendix: data issues found
+
+* 35 ABO listings were fabric swatches ("Khaki Swatch, ...") filed under chair/sofa; removed.
+* 250 of 1485 items have classical/rembg IoU < 0.3 and are excluded from scenes (mostly rugs shown in room photos and wire shelves).
+* 23 items initially had empty masks from both methods (swatches and thin wire shelves); a full-frame fallback was added.

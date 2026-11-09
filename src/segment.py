@@ -48,6 +48,13 @@ def grabcut_mask(img, iters=4):
     return _clean(np.where((m == 1) | (m == 3), 255, 0).astype(np.uint8))
 
 
+def full_mask(img):
+    """Fallback mask = whole image minus a 3px frame."""
+    m = np.zeros(img.shape[:2], np.uint8)
+    m[3:-3, 3:-3] = 255
+    return m
+
+
 def classical_mask(img):
     """Otsu first; if the mask looks wrong (too small / floods the image) fall back to GrabCut.
     Returns (mask uint8 0/255, method name)."""
@@ -55,7 +62,10 @@ def classical_mask(img):
     frac = (m > 0).mean()
     if 0.08 < frac < 0.90:
         return m, "otsu"
-    return grabcut_mask(img), "grabcut"
+    g = grabcut_mask(img)
+    if (g > 0).mean() < 0.02:                  # GrabCut can also fail (empty mask) -> last resort: whole frame
+        return full_mask(img), "fullframe"
+    return g, "grabcut"
 
 
 # ---------------------------------------------------------------- deep (rembg)

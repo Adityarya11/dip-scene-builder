@@ -159,7 +159,8 @@ def fig_palettes(lib, prompt="cozy reading corner"):
     fig.tight_layout(); fig.savefig(FIG / "fig5_palettes.png", dpi=150); plt.close(fig)
 
 
-def run(data, art, make_figs=True, clip_text_eval=True):
+def run(data, art, make_figs=True, clip_text_eval=True, light=False):
+    """light=True skips figures 1-2 (they need the rembg masks / rembg itself)."""
     art = Path(art); Path("results").mkdir(exist_ok=True); FIG.mkdir(parents=True, exist_ok=True)
     meta = pd.read_csv(art / "meta.csv")
     feats = {k: np.load(art / f"feat_{k}.npy") for k in ["hsv", "hog", "lbp"]}
@@ -187,12 +188,15 @@ def run(data, art, make_figs=True, clip_text_eval=True):
     json.dump(out, open("results/metrics.json", "w"), indent=2, default=float)
     print(df.round(3).to_string())
     if make_figs:
-        fig_ndcg(table); fig_masks(data, art, meta); fig_stages(data, meta)
+        fig_ndcg(table)
+        if not light:
+            fig_masks(data, art, meta); fig_stages(data, meta)
     return out
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data"); ap.add_argument("--art", default="artifacts")
+    ap.add_argument("--light", action="store_true")
     a = ap.parse_args()
-    run(a.data, a.art)
+    run(a.data, a.art, light=a.light)

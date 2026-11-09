@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from src.features import HANDCRAFTED, clip_images, load_clip
 from src.preprocess import enhance, load_rgb
-from src.segment import classical_mask, cutout, iou, rembg_mask
+from src.segment import classical_mask, cutout, full_mask, iou, rembg_mask
 
 
 def main(data, out, device, skip_clip=False):
@@ -42,6 +42,8 @@ def main(data, out, device, skip_clip=False):
 
         # final cut-out = rembg mask (better); fall back to classical if rembg returned (almost) nothing
         mask = rm if (rm > 0).mean() > 0.03 else cm
+        if (mask > 0).sum() == 0:                  # never leave an item without a cut-out
+            mask = full_mask(img)
         if r.category == "wall_art":
             # framed pictures are rectangles; U2-Net "salient object" cuts out the motif inside the frame.
             # So use the bounding rectangle of the classical mask instead.
