@@ -42,6 +42,12 @@ def main(data, out, device, skip_clip=False):
 
         # final cut-out = rembg mask (better); fall back to classical if rembg returned (almost) nothing
         mask = rm if (rm > 0).mean() > 0.03 else cm
+        if r.category == "wall_art":
+            # framed pictures are rectangles; U2-Net "salient object" cuts out the motif inside the frame.
+            # So use the bounding rectangle of the classical mask instead.
+            ys, xs = np.where(cm > 0)
+            if len(ys) and (cm > 0).mean() > 0.08:
+                mask = np.zeros_like(cm); mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1] = 255
         cp = out / "cutouts" / f"{r.image_id}.webp"
         if not cp.exists():
             c = cutout(img, mask)

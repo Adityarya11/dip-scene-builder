@@ -77,6 +77,10 @@ class Library:
         self.summ = [item_summary(l, w) for l, w in zip(self.pal_lab, self.pal_w)]
         self.index = Index(self.emb, "clip")
         self.cat = self.meta.category.values
+        # quality filter: if the two segmenters disagree (IoU < 0.3) the cut-out is probably bad -> never use it in a scene
+        # (wall art uses a rectangle mask instead, so it is exempt)
+        iou = self.meta.get("iou_classical_vs_rembg", pd.Series(1.0, index=self.meta.index)).values
+        self.ok = (iou >= 0.3) | (self.cat == "wall_art")
         self.clip, self._cache = clip, {}
 
     def encode(self, texts):
@@ -108,7 +112,7 @@ def choose_items(lib, slots, style, harmony=True, K=5):
     qv = lib.encode([f"a photo of a {style} {s['q']}".replace("  ", " ") for s in slots])
     cands, sims = [], []
     for s, q in zip(slots, qv):
-        ids, sc = lib.index.search(q, K, mask=(lib.cat == s["cat"]))
+        ids, sc = lib.index.search(q, K, mask=(lib.cat == s["cat"]) & lib.ok)
         cands.append(ids)
         sims.append((sc - sc[0]) / 0.05)
     if not harmony:
