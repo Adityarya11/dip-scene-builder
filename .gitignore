@@ -16,3 +16,5 @@ data_test/
 artifacts/masks/
 artifacts_test/
 results_test/
+outputs.zip
+*.zip
