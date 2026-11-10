@@ -9,3 +9,5 @@ scikit-learn
 scikit-image
 torch
 open_clip_torch
+spaces
+trimesh>=4.0,<5

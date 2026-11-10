@@ -18,3 +18,5 @@ artifacts_test/
 results_test/
 outputs.zip
 *.zip
+hf-deploy
+artifacts/
