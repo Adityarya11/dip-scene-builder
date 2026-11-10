@@ -7,7 +7,7 @@ Everything after retrieval is plain NumPy/OpenCV image processing.
 """
 import re
 import time
-from itertools import product
+
 from pathlib import Path
 
 import cv2
@@ -73,7 +73,14 @@ class Library:
         self.meta = pd.read_csv(self.art / "meta.csv")
         self.emb = np.load(self.art / "embeddings.npy")
         p = np.load(self.art / "palettes.npz")
-        self.pal_lab, self.pal_w = p["lab"], p["w"]
+        if "image_id" in p:
+            lookup = {str(iid): j for j, iid in enumerate(p["image_id"])}
+            rows = [lookup[str(iid)] for iid in self.meta.image_id]
+        elif len(p["lab"]) == len(self.meta):
+            rows = np.arange(len(self.meta))
+        else:
+            raise ValueError("Stale/misaligned palettes: run python scripts/refresh_palettes.py before deployment.")
+        self.pal_lab, self.pal_w = p["lab"][rows], p["w"][rows]
         self.summ = [item_summary(l, w) for l, w in zip(self.pal_lab, self.pal_w)]
         self.index = Index(self.emb, "clip")
         self.cat = self.meta.category.values
@@ -86,7 +93,8 @@ class Library:
             (self.art / "cutouts" / f"{image_id}.webp").is_file()
             for image_id in self.meta.image_id
         ])
-        self.ok = quality_ok & cutout_exists
+        real_product = ~self.meta.caption.fillna("").str.contains("swatch", case=False).to_numpy()
+        self.ok = quality_ok & cutout_exists & real_product & (self.pal_w.sum(axis=1) > 0)
         self.clip, self._cache = clip, {}
 
     def encode(self, texts):
@@ -109,7 +117,7 @@ class Library:
 LAMBDA = 3.0        # weight of harmony vs CLIP text score (see choose_items)
 
 
-def choose_items(lib, slots, style, harmony=True, K=5):
+def choose_items(lib, slots, style, harmony=True, K=8):
     """Top-K candidates per slot by CLIP text similarity (restricted to the slot's category),
     then brute-force every combination (K^slots <= ~15k) and keep the best.
         combo score = mean_i s_i + LAMBDA * harmony(combo)
@@ -119,6 +127,12 @@ def choose_items(lib, slots, style, harmony=True, K=5):
     cands, sims = [], []
     for s, q in zip(slots, qv):
         ids, sc = lib.index.search(q, K, mask=(lib.cat == s["cat"]) & lib.ok)
+        keep = np.isfinite(sc)
+        ids, sc = ids[keep], sc[keep]
+        if not len(ids):
+            raise ValueError(f"No usable products for {s['cat']}; check cutouts and palettes.")
+        keep = sc >= sc[0] - 0.04  # never trade away semantic relevance for colour
+        ids, sc = ids[keep], sc[keep]
         cands.append(ids)
         sims.append((sc - sc[0]) / 0.05)
     if not harmony:
@@ -127,16 +141,14 @@ def choose_items(lib, slots, style, harmony=True, K=5):
     allids = sorted({int(i) for c in cands for i in c})
     pos = {i: j for j, i in enumerate(allids)}
     P = np.array([[pair_score(lib.summ[a], lib.summ[b]) for b in allids] for a in allids])
-    best, best_s = None, -1e9
-    for combo in product(*[range(len(c)) for c in cands]):
-        ids = [int(cands[j][c]) for j, c in enumerate(combo)]
-        clip_s = np.mean([sims[j][c] for j, c in enumerate(combo)])
-        pp = [pos[i] for i in ids]
-        hs = np.mean([P[a, b] for x, a in enumerate(pp) for b in pp[x + 1:]])
-        s = clip_s + LAMBDA * hs
-        if s > best_s:
-            best, best_s = ids, s
-    return best, cands
+    # Exact same objective, evaluated in NumPy rather than slow Python loops.
+    grid = np.indices(tuple(len(c) for c in cands)).reshape(len(cands), -1)
+    clip_s = sum(sims[j][grid[j]] for j in range(len(cands))) / len(cands)
+    pp = [np.array([pos[int(i)] for i in c])[grid[j]] for j, c in enumerate(cands)]
+    pairs = [(a, b) for a in range(len(pp)) for b in range(a + 1, len(pp))]
+    hs = sum(P[pp[a], pp[b]] for a, b in pairs) / max(1, len(pairs))
+    best = int(np.argmax(clip_s + LAMBDA * hs))
+    return [int(c[grid[j, best]]) for j, c in enumerate(cands)], cands
 
 
 # ---------------------------------------------------------------- 4. procedural room
@@ -163,7 +175,7 @@ def make_room(wall_ab, seed=0):
 
 def wall_tint(items_summ):
     """Very light wall colour with a whisper of the scene's average hue -> keeps the room harmonious."""
-    ab = [(np.cos(np.radians(h)) * c, np.sin(np.radians(h)) * c) for h, c, neutral in items_summ if not neutral]
+    ab = [(np.cos(np.radians(s[0])) * s[1], np.sin(np.radians(s[0])) * s[1]) for s in items_summ if not s[2]]
     return tuple(0.18 * np.mean(ab, axis=0)) if ab else (1.5, 7.0)
 
 
@@ -258,7 +270,7 @@ def render(lib, ids, slots, seed=0):
     return Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8))
 
 
-def compose(lib, prompt, harmony=True, K=5, seed=0):
+def compose(lib, prompt, harmony=True, K=8, seed=0):
     """Public entry: returns dict(image, ids, slots, scene, style, harmony, seconds)."""
     t0 = time.time()
     scene, style = parse_prompt(prompt)
@@ -266,7 +278,7 @@ def compose(lib, prompt, harmony=True, K=5, seed=0):
     ids, cands = choose_items(lib, slots, style, harmony, K)
     img = render(lib, ids, slots, seed)
     return dict(image=img, ids=ids, slots=slots, scene=scene, style=style, candidates=cands,
-                harmony=harmony_score([lib.summ[i] for i in ids]), seconds=time.time() - t0)
+                harmony=harmony_score([lib.summ[i] for i in ids]), harmony_enabled=bool(harmony), seconds=time.time() - t0)
 
 
 # ---------------------------------------------------------------- 7. display helper

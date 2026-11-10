@@ -68,20 +68,26 @@ def chroma_hue(lab):
 def item_summary(lab, w):
     """Reduce an item's palette to (hue, chroma, is_neutral): the weighted-mean colour of its *chromatic* part."""
     ch, hue = chroma_hue(lab)
+    mean_lab = tuple(np.average(lab, axis=0, weights=w).tolist()) if w.sum() else (50., 0., 0.)
     m = (w > 0) & (ch >= NEUTRAL_CHROMA)
     if m.sum() == 0 or w[m].sum() < 0.15:              # < 15% of the object is coloured -> neutral item
-        return 0.0, float((ch * w).sum() / max(w.sum(), 1e-6)), True
+        return 0.0, float((ch * w).sum() / max(w.sum(), 1e-6)), True, mean_lab
     ww = w[m] / w[m].sum()
     ang = np.radians(hue[m])
     h = np.degrees(np.arctan2((ww * np.sin(ang)).sum(), (ww * np.cos(ang)).sum())) % 360   # circular mean
-    return float(h), float((ww * ch[m]).sum()), False
+    return float(h), float((ww * ch[m]).sum()), False, mean_lab
 
 
 def pair_score(a, b):
     """Compatibility of two item summaries in [0,1] = 0.7*hue + 0.3*saturation(chroma) agreement."""
-    (ha, ca, na), (hb, cb, nb) = a, b
+    (ha, ca, na), (hb, cb, nb) = a[:3], b[:3]
     if na or nb:
-        return 0.95                                    # neutrals go with everything
+        if len(a) < 4 or len(b) < 4:
+            return 0.95
+        # Neutrals are compatible, not identical: retain warm/cool undertones
+        # and a small lightness term instead of a constant 0.95 plateau.
+        delta = (np.asarray(a[3]) - np.asarray(b[3])) * [0.25, 1., 1.]
+        return float(0.70 + 0.30 * np.exp(-np.linalg.norm(delta) / 22.0))
     d = abs(ha - hb); d = min(d, 360 - d)              # hue distance 0..180
     hue = max(1 - d / 45,                              # analogous (same family)
               0.9 * max(0, 1 - abs(d - 180) / 30),     # complementary
