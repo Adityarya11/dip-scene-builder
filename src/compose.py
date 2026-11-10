@@ -16,7 +16,7 @@ import pandas as pd
 from PIL import Image
 
 from src.edit2d import affine_chain, opaque_bbox, rotate_rgba, solve_gap, to3
-from src.backrest import recline_rgba
+from src.backrest import recline_rgba, resolve_direction
 from src.index import Index
 from src.palette import harmony_score, item_summary, lab2rgb, pair_score, rgb2lab
 
@@ -260,16 +260,20 @@ def make_layer(lib, idx, slot, room, room_key, rot=0):
     edits cannot accumulate interpolation damage. rot is a 2D image-plane rotation in degrees."""
     cat = slot["cat"]
     flip = cat == "chair" and slot["x"] > 0.6                            # chairs face the room centre
-    key = (id(lib), int(idx), cat, flip, round(float(slot["y"]), 4), int(rot), room_key)
+    key = (id(lib), int(idx), cat, slot['q'], flip, round(float(slot["y"]), 4), int(rot), room_key)
 
     def build():
         rgba = reinhard(lib.cutout(idx), room)
         if flip:
             rgba = rgba[:, ::-1]
         dim, frac = PRIORS[cat]
+        if cat == 'lamp':
+            dim, frac = ('h', .17) if 'desk' in slot['q'] else ('h', .44)
         h0, w0 = rgba.shape[:2]
         s = (frac * (W if dim == "w" else H)) / (w0 if dim == "w" else h0)
         s *= 0.85 + 0.15 * (slot["y"] / 0.9)                             # farther (higher in image) = a bit smaller
+        if cat == 'lamp':
+            s = min(s, (.11 if 'desk' in slot['q'] else .16)*W/w0)
         w, h = max(2, int(w0 * s)), max(2, int(h0 * s))
         if cat == "rug":
             h = int(h * 0.35)                                            # a rug on the floor, seen at an angle, looks squashed
@@ -318,7 +322,8 @@ def place_backrest_item(lib, idx, slot, room, room_key, config):
     it = place_item(lib, idx, slot, room, room_key, 0)
     if slot['cat'] != 'chair':
         raise ValueError('Backrest editing is available for chair slots only.')
-    cfg = {k: config.get(k, v) for k, v in dict(angle=90, hinge=55, left=0, right=100, direction='left').items()}
+    cfg = {k: config.get(k, v) for k, v in dict(angle=90, hinge=55, left=0, right=100, direction='outward').items()}
+    cfg['direction'] = resolve_direction(cfg['direction'], slot['x'] > .6)
     key = ('backrest', id(lib), int(idx), tuple(sorted(cfg.items())), slot['x'], slot['y'], room_key)
     rgba, info = _remember(_LAYERS, key, lambda: recline_rgba(it['rgba'], **cfg), 64)
     original_x, original_y = it['x0'], it['y0']
@@ -336,6 +341,29 @@ def place_backrest_item(lib, idx, slot, room, room_key, config):
 def bbox_canvas(it):
     b = it["bbox_l"]
     return it["x0"] + b[0], it["y0"] + b[1], it["x0"] + b[2], it["y0"] + b[3]
+
+
+def scene_items(lib, ids, slots, room, key, rots=None, backrests=None):
+    """Prepare layers and anchor desk lamps on the desk rather than the floor."""
+    rots, backrests = rots or {}, backrests or {}
+    items = [place_backrest_item(lib, i, s, room, key, backrests[j]) if j in backrests
+             else place_item(lib, i, s, room, key, int(rots.get(j, 0)))
+             for j, (i, s) in enumerate(zip(ids, slots))]
+    desk = next((j for j, s in enumerate(slots) if s['cat'] == 'table' and 'desk' in s['q']), None)
+    if desk is not None:
+        tx0, ty0, tx1, ty1 = bbox_canvas(items[desk])
+        for j, s in enumerate(slots):
+            if s['cat'] != 'lamp' or 'desk' not in s['q']:
+                continue
+            it = items[j]
+            bx0, _, bx1, by1 = it['bbox_l']
+            nx = int(tx0 + .78*(tx1-tx0) - (bx0+bx1)/2)
+            base = int(ty0 + .22*(ty1-ty0))
+            ny = base - by1
+            M = it['M_net'].copy()
+            M[:, 2] += [nx-it['x0'], ny-it['y0']]
+            it.update(x0=nx, y0=ny, base=base, M_net=M, support=desk)
+    return items
 
 
 CAT_NAMES = {"sofa": "Sofa", "chair": "Chair", "table": "Table", "lamp": "Lamp", "rug": "Rug",
@@ -371,9 +399,7 @@ def render_scene(lib, ids, slots, seed=0, edits=None, overlay=False):
     backrests = edits.get('backrest', {})
     room, room_key = get_room([lib.summ[i] for i in ids], seed)
     canvas = room.astype(np.float32).copy()
-    items = [place_backrest_item(lib, i, s, room, room_key, backrests[j]) if j in backrests
-             else place_item(lib, i, s, room, room_key, int(rots.get(j, 0)))
-             for j, (i, s) in enumerate(zip(ids, slots))]
+    items = scene_items(lib, ids, slots, room, room_key, rots, backrests)
 
     gap = None
     g = edits.get("gap")
@@ -395,6 +421,10 @@ def render_scene(lib, ids, slots, seed=0, edits=None, overlay=False):
 
     # draw order: rug (on the floor) -> wall art -> everything else back-to-front by foot position
     order = sorted(range(len(slots)), key=lambda j: (slots[j]["cat"] != "rug", slots[j]["cat"] != "wall_art", slots[j]["y"]))
+    for j, it in enumerate(items):
+        if 'support' in it:
+            order.remove(j)
+            order.insert(order.index(it['support'])+1, j)
     for j in order:
         it = items[j]
         if it["kind"] != "rug":
@@ -417,13 +447,8 @@ def gap_limits(lib, ids, slots, rots, a, b, seed=0, backrests=None):
     """Feasible horizontal gap range for the pair (a fixed, b moves) at the current rotations.
     Needs only the two cached layers, no painting."""
     room, key = get_room([lib.summ[i] for i in ids], seed)
-    A = place_item(lib, ids[a], slots[a], room, key, int(rots.get(a, 0)))
-    B = place_item(lib, ids[b], slots[b], room, key, int(rots.get(b, 0)))
-    backrests = backrests or {}
-    if a in backrests:
-        A = place_backrest_item(lib, ids[a], slots[a], room, key, backrests[a])
-    if b in backrests:
-        B = place_backrest_item(lib, ids[b], slots[b], room, key, backrests[b])
+    items = scene_items(lib, ids, slots, room, key, rots, backrests)
+    A, B = items[a], items[b]
     ba, bb = bbox_canvas(A), bbox_canvas(B)
     cur = (bb[0] - ba[2]) if (bb[0] + bb[2]) >= (ba[0] + ba[2]) else (ba[0] - bb[2])
     return solve_gap(ba, bb, cur, W)
@@ -476,6 +501,8 @@ def compare_strip(lib, ids, slots, j, rot=0, seed=0, backrest=None):
         L = make_layer(lib, ids[j], slots[j], room, key, r)
         region = None
         if backrest is not None:
+            backrest = dict(backrest)
+            backrest['direction'] = resolve_direction(backrest.get('direction', 'outward'), slots[j]['x'] > .6)
             text = 'source / backrest region' if k == 0 else f"backrest {backrest['angle']:g} deg (2D)"
             rgba, detail = recline_rgba(L['rgba'], **backrest)
             if k == 0:

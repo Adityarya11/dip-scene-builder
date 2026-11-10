@@ -11,6 +11,22 @@ from src.edit2d import opaque_bbox
 BACKREST_ANGLES = (90, 105, 120, 135, 150, 165, 180)
 
 
+def resolve_direction(direction='outward', flipped=False):
+    """Resolve the room-facing chair heuristic after the renderer's horizontal flip.
+
+    The right-hand chair in office/dining layouts faces left; its outward lean is
+    right. Absolute left/right remain available for photos with another viewpoint.
+    """
+    outward = 'right' if flipped else 'left'
+    if direction == 'outward':
+        return outward
+    if direction == 'inward':
+        return 'left' if outward == 'right' else 'right'
+    if direction in ('left', 'right'):
+        return direction
+    raise ValueError('Choose outward, inward, left or right.')
+
+
 def recline_rgba(rgba, angle=90, hinge=55, left=0, right=100, direction='left'):
     """Return (RGBA, report); report.offset locates output relative to source.
 

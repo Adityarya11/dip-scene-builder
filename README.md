@@ -57,10 +57,12 @@ The syllabus labs 1-10 are MATLAB; this project uses Python with OpenCV, scikit-
 
 The current editor changes a **selected backrest region**, not the orientation of the whole chair picture.
 Build a reading corner, home office or dining room, select a chair, choose **90° / 135° / 180°** (or an intermediate preset),
-then click **Apply 2D changes**. 90° restores the original photo. The seat and legs below the hinge keep their original
+then click **Apply changes**. 90° restores the original photo. The seat and legs below the hinge keep their original
 pixels and canvas position, unless spacing explicitly translates the chair.
 
 Open **Adjust backrest region** to set the hinge height, left/right mask edges and recline direction.
+The default **outward** direction accounts for the chair's horizontal flip: an office chair on the right leans right,
+away from the desk. **Inward** reverses this; explicit left/right overrides are available for photos with another viewpoint.
 Turn on **Show transformations** to inspect the cyan region and orange hinge line before editing.
 The controls are guided: the catalogue has object masks, not labelled chair-part masks, so the initial rectangle is
 an estimate and can include arms or miss part of the backrest. Side-view chairs give the clearest result.
@@ -69,18 +71,27 @@ Implementation: `src/backrest.py` partitions the RGBA image into moving and fixe
 the backrest with `cv2.warpAffine`, and composites it over the unchanged base using premultiplied alpha.
 The hinge line stays fixed. At 180° a small projected thickness prevents a singular warp. The renderer preserves the
 base coordinates even when the moving backrest expands the cutout bounds. Spacing is still measured after deformation.
-There is no CLIP inference, segmentation, training, GPU request or 3D export in this editing callback.
+There is no CLIP inference, segmentation, training or GPU request in this editing callback.
+
+The same angle also articulates the **3D proxy backrest and headrest** around a seat/back hinge. Seat, legs and arms stay
+fixed. A small GLB is regenerated only when angle/direction changes; spacing, overlays and mask adjustments reuse it.
+Reset restores both the image and upright 3D pose. This is procedural proxy geometry, not reconstructed product geometry.
+
+Desk lamps now use a small tabletop-specific size and anchor; floor lamps keep a taller, width-limited size.
 
 **Limit:** these values control a projected 2D deformation relative to the source photo. They are not recovered physical
 seat/back angles, a new viewpoint, or a mechanically accurate recliner simulation. Hidden surfaces cannot be recovered
-by this operation. The 3D view remains unchanged.
+by this operation. The 3D mesh has an explicit geometric hinge but is still a simplified category proxy.
 
 Focused verification:
 ```
 python scripts/check_backrest.py
 python scripts/check_backrest_render.py
+python scripts/check_visual_fixes.py
+python scripts/check_3d_recline.py
 ```
-The latter uses a real cached chair and saves 90°/135°/180° comparisons and measured CPU render timings in `results/backrest/`.
+`check_backrest_render.py` saves real-chair comparisons and CPU render timings in `results/backrest/`.
+The visual/3D checks save the corrected office scene and articulated GLBs in `results/backrest_sync/`.
 
 ## Historical whole-image rotation experiment (superseded UI)
 
