@@ -58,15 +58,13 @@ def _product_colors(lib, idx):
     else:
         secondary = primary.copy()
 
-    # Moderate shade differences without changing the selected product's hue.
-    primary = _tone(primary, saturation=1.35)
+    # Keep source swatches unchanged; derived shades are structural only.
     if np.linalg.norm(secondary-primary) < 35:
         secondary = _mix(primary, [42, 43, 45], .23)
-    else:
-        secondary = _tone(secondary, saturation=1.25)
+
     light = _mix(primary, [255, 255, 255], .16)
     dark = _mix(primary, [32, 34, 37], .36)
-    accent = _tone(secondary, saturation=1.35)
+    accent = secondary.copy()
     if np.linalg.norm(accent-primary) < 35:
         accent = _mix(primary, [32, 34, 37], .42)
     return tuple(np.clip(c, 0, 255) for c in (primary, secondary, light, dark, accent))
@@ -74,6 +72,21 @@ def _product_colors(lib, idx):
 
 def export_scene3d(lib, result, output_path=None):
     scene = trimesh.Scene()
+    template = str(result.get('scene', 'living room')).strip().lower()
+    product_indices = [int(i) for i in result['ids']]
+    product_ids = [str(lib.meta.iloc[i]['image_id']) for i in product_indices]
+    # A numeric harmony score is not the harmony-enabled selection flag.
+    harmony_enabled = result.get('harmony_enabled')
+    scene.metadata.update({
+        'representation': 'category-based product-coloured proxies; not product reconstructions',
+        'scene': template,
+        'product_ids': product_ids,
+        'product_indices': product_indices,
+        'categories': [slot['cat'] for slot in result['slots']],
+        'harmony_enabled': None if harmony_enabled is None else bool(harmony_enabled),
+        'layout_version': 2,
+    })
+    item_transform = np.eye(4)
 
     def rgba(rgb, shade=1.0):
         a = np.asarray(rgb, dtype=float).ravel()[:3]
@@ -84,18 +97,21 @@ def export_scene3d(lib, result, output_path=None):
     def box(name, size, pos, rgb, shade=1):
         mesh = trimesh.creation.box(extents=size)
         mesh.apply_translation(pos)
+        mesh.apply_transform(item_transform)
         mesh.visual.face_colors = rgba(rgb, shade)
         scene.add_geometry(mesh, node_name=name)
 
     def cylinder(name, radius, height, pos, rgb, shade=1, sections=20):
         mesh = trimesh.creation.cylinder(radius=radius, height=height, sections=sections)
         mesh.apply_translation(pos)
+        mesh.apply_transform(item_transform)
         mesh.visual.face_colors = rgba(rgb, shade)
         scene.add_geometry(mesh, node_name=name)
 
     def sphere(name, radius, pos, rgb):
         mesh = trimesh.creation.icosphere(subdivisions=2, radius=radius)
         mesh.apply_translation(pos)
+        mesh.apply_transform(item_transform)
         mesh.visual.face_colors = rgba(rgb)
         scene.add_geometry(mesh, node_name=name)
 
@@ -110,36 +126,71 @@ def export_scene3d(lib, result, output_path=None):
     box('baseboard_back', (7.55, .08, .14), (0, 2.73, .08), [250, 246, 239])
     box('baseboard_left', (.08, 5.5, .14), (-3.70, -.02, .08), [250, 246, 239])
 
-    # Make room layout independent of 2D screen coordinates; those are not 3D positions.
-    # Multiple instances of a category are offset slightly rather than overlapping exactly.
-    positions = {
-        'rug': (0.0, -.50), 'chair': (-.75, -.65), 'sofa': (-.85, -.25),
-        'table': (1.05, -.70), 'lamp': (1.65, .85), 'shelf': (-2.75, 1.95),
-        'plant_vase': (2.70, 1.45), 'wall_art': (0.90, 2.66)
+    # Metre-scale floor plans: x, y, rotation about Z (not canvas positions).
+    layouts = {
+        'living room': {
+            'rug': [(0, -.25, 0)], 'sofa': [(0, 1.45, 0)],
+            'chair': [(-2.1, -.15, np.pi/2)], 'table': [(0, -.35, 0)],
+            'lamp': [(1.75, 1.55, 0)], 'shelf': [(-2.8, 2.35, 0)],
+            'plant_vase': [(-2.65, .8, 0)], 'wall_art': [(0, 2.66, 0)]},
+        'reading corner': {
+            'rug': [(-.4, -.35, 0)], 'chair': [(-.6, .15, -.18)],
+            'shelf': [(-2.7, 2.35, 0)], 'lamp': [(.65, .6, 0)],
+            'plant_vase': [(2.3, 1.7, 0)], 'table': [(.85, -.5, 0)]},
+        'home office': {
+            'table': [(.1, 1.25, 0)], 'chair': [(.1, -.1, np.pi)],
+            'shelf': [(-2.7, 2.35, 0)], 'lamp': [(.65, 1.4, 0)],
+            'plant_vase': [(2.75, .6, 0)], 'wall_art': [(.1, 2.66, 0)]},
+        'dining room': {
+            'table': [(0, 0, 0)], 'rug': [(0, 0, 0)],
+            'chair': [(-1.4, 0, np.pi/2), (1.4, 0, -np.pi/2),
+                      (0, 1.12, 0), (0, -1.12, np.pi)],
+            'wall_art': [(0, 2.66, 0)]},
+        'bedroom': {
+            # This template retrieves an accent chair/dresser, not a bed.
+            'rug': [(-.35, -.6, 0)], 'chair': [(-1.9, .55, -.25)],
+            'shelf': [(1.2, 2.25, 0)], 'plant_vase': [(2.8, 1.2, 0)],
+            'wall_art': [(1.2, 2.66, 0)]},
+        'entryway': {
+            'shelf': [(0, 2.25, 0)], 'wall_art': [(0, 2.66, 0)],
+            'lamp': [(-1.7, 1.95, 0)], 'plant_vase': [(1.9, 1.8, 0)],
+            'rug': [(0, -.25, 0)]},
     }
+    positions = layouts.get(template, layouts['living room'])
     counts = {}
-    categories = []
     for index, slot in zip(result['ids'], result['slots']):
         cat = slot['cat']
-        categories.append(cat)
         count = counts.get(cat, 0)
         counts[cat] = count + 1
-        x, y = positions.get(cat, (0., 0.))
-        x += .40 * (count % 3)
-        y -= .38 * (count // 3)
+        poses = positions.get(cat, layouts['living room'].get(cat, [(0., 0., 0.)]))
+        x, y, angle = poses[count % len(poses)]
+        # Additional instances get full-width separation rather than a tiny nudge.
+        repeat = count // len(poses)
+        x += (1.35 if cat == 'wall_art' else 1.65) * repeat
+        item_transform = trimesh.transformations.rotation_matrix(angle, [0, 0, 1], [x, y, 0])
         rgb, secondary, light, dark, accent = _product_colors(lib, index)
         name = f'{cat}_{count}'
         if __import__('os').environ.get('DIP_DEBUG_PALETTES') == '1':
             print(f'[3D palette] {name} product_index={index} primary={rgb.astype(int).tolist()} secondary={secondary.astype(int).tolist()}')
 
         if cat == 'rug':
-            box(name+'_rug_edge', (3.71, 2.70, .014), (-.10, -.58, .012), dark)
-            box(name+'_rug', (3.51, 2.51, .028), (-.10, -.58, .032), rgb)
+            rw, rd = (2.0, 3.4) if template == 'entryway' else (3.71, 2.70)
+            box(name+'_rug_edge', (rw, rd, .014), (x, y, .012), dark)
+            box(name+'_rug', (rw-.20, rd-.19, .028), (x, y, .032), rgb)
             # Inset stripes echo the selected rug palette.
-            for j, offset in enumerate((-.94, .94)):
-                box(f'{name}_stripe_{j}', (3.34, .075, .006), (-.10, -.58+offset, .049), accent)
+            for j, offset in enumerate((-rd/2+.4, rd/2-.4)):
+                box(f'{name}_stripe_{j}', (rw-.37, .075, .006), (x, y+offset, .049), accent)
 
         elif cat in ('chair', 'sofa'):
+            if cat == 'chair' and template in ('dining room', 'home office'):
+                # Upright dining/task chair rather than a full-size armchair.
+                for sx in (-1, 1):
+                    for sy in (-1, 1):
+                        box(f'{name}_leg_{sx}_{sy}', (.065, .065, .44),
+                            (x+sx*.24, y+sy*.23, .22), dark)
+                box(name+'_seat', (.62, .62, .12), (x, y, .50), rgb)
+                box(name+'_back', (.62, .10, .58), (x, y+.27, .83), secondary)
+                continue
             w = 2.05 if cat == 'sofa' else 1.06
             d = .98
             # All supports touch the floor; coherent seat, back, and arm proportions.
@@ -156,21 +207,40 @@ def export_scene3d(lib, result, output_path=None):
                     (x+side*(w/2-.08), y, .86), secondary)
 
         elif cat == 'table':
-            box(name+'_top', (1.12, .76, .13), (x, y, .76), rgb)
+            tw, td, th = {'dining room': (1.85, 1.10, .79),
+                          'home office': (1.75, .85, .79)}.get(template, (1.25, .76, .48))
+            box(name+'_top', (tw, td, .10), (x, y, th-.05), rgb)
             for sx in (-1, 1):
                 for sy in (-1, 1):
-                    box(f'{name}_leg_{sx}_{sy}', (.08, .08, .70),
-                        (x+sx*.46, y+sy*.28, .35), dark)
+                    box(f'{name}_leg_{sx}_{sy}', (.08, .08, th-.10),
+                        (x+sx*(tw/2-.12), y+sy*(td/2-.12), (th-.10)/2), dark)
 
         elif cat == 'lamp':
+            if template == 'home office':
+                # The office slot requests a desk lamp: sit it on the desktop.
+                cylinder(name+'_foot', .14, .05, (x, y, .815), dark)
+                cylinder(name+'_stem', .024, .38, (x, y, 1.03), secondary)
+                cylinder(name+'_shade', .18, .18, (x, y, 1.29), rgb)
+                continue
             cylinder(name+'_foot', .23, .07, (x, y, .035), [75, 75, 73])
             cylinder(name+'_stem', .032, 1.48, (x, y, .77), [94, 87, 80])
             cylinder(name+'_shade', .31, .35, (x, y, 1.66), rgb)
             sphere(name+'_bulb', .11, (x, y, 1.46), [254, 238, 194])
 
         elif cat == 'shelf':
-            # Place against back/side wall, not hanging in the air.
-            x, y = -3.08, 2.39
+            if template in ('bedroom', 'entryway'):
+                # Dresser/console slots should not become towering bookcases.
+                for side in (-1, 1):
+                    box(f'{name}_foot_{side}', (.14, .40, .18), (x+side*.69, y, .09), dark)
+                box(name+'_cabinet', (1.75, .55, .80), (x, y, .58), rgb)
+                box(name+'_top', (1.85, .61, .08), (x, y, 1.02), secondary)
+                for side in (-1, 1):
+                    box(f'{name}_door_{side}', (.80, .035, .65),
+                        (x+side*.42, y-.29, .59), secondary)
+                    box(f'{name}_handle_{side}', (.09, .04, .04),
+                        (x+side*.12, y-.32, .65), dark)
+                continue
+            # Respect the template's shelf placement.
             for side in (-1, 1):
                 box(f'{name}_side_{side}', (.10, .42, 2.00),
                     (x+side*.53, y, 1.0), dark)
@@ -181,7 +251,7 @@ def export_scene3d(lib, result, output_path=None):
             for j in range(5):
                 box(f'{name}_book_{j}', (.10, .26, .31 + j*.035),
                     (x-.40+j*.18, y, .79 + j*.017),
-                    [[163,97,87],[100,137,163],[186,155,94],[117,150,124],[112,104,143]][j])
+                    (rgb, secondary, light, dark, accent)[j])
 
         elif cat == 'plant_vase':
             cylinder(name+'_pot', .26, .43, (x, y, .215), accent)
@@ -192,9 +262,8 @@ def export_scene3d(lib, result, output_path=None):
                 sphere(f'{name}_leaf_{j}', r, (x+dx,y+dy,dz), [75, 142 + (j%2)*15, 76])
 
         elif cat == 'wall_art':
-            x = min(2.2, max(-1.4, x))
-            box(name+'_frame', (1.20, .075, .90), (x, 2.69, 1.90), [91, 66, 45])
-            box(name+'_art', (1.08, .016, .78), (x, 2.64, 1.90), rgb)
+            box(name+'_frame', (1.20, .075, .90), (x, y+.03, 1.90), dark)
+            box(name+'_art', (1.08, .016, .78), (x, y-.02, 1.90), rgb)
 
     # Critical fix: GLB/glTF viewers normally use Y-up, while trimesh scenes here use Z-up.
     # Rotation -90 degrees around X maps (x,y,z) -> (x,z,-y).
