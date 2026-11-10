@@ -9,7 +9,7 @@ python_version: "3.11"
 app_file: app.py
 pinned: false
 license: mit
-short_description: Text prompt to a composed 2.5D room scene from product images
+short_description: DIP room composition with backrest and spacing controls
 ---
 
 # Digital Image Processing demonstration: composing a room from catalogue photos
