@@ -53,7 +53,40 @@ Source: *Digital Image Processing 3-0-2, Course Structure 2026-27* (Gonzalez and
 Labs that line up with this project: 2 (histograms), 3 (filtering), 6 (colour), 7 (morphology), 8 (features), 9 (segmentation), 10 (classical ML), 11 (CNN), 12 (ViT).
 The syllabus labs 1-10 are MATLAB; this project uses Python with OpenCV, scikit-image and scikit-learn, which the syllabus lists as references.
 
-## Interactive 2D geometric transformations (the DIP work you can touch)
+## Chair backrest editing (current app)
+
+The current editor changes a **selected backrest region**, not the orientation of the whole chair picture.
+Build a reading corner, home office or dining room, select a chair, choose **90° / 135° / 180°** (or an intermediate preset),
+then click **Apply 2D changes**. 90° restores the original photo. The seat and legs below the hinge keep their original
+pixels and canvas position, unless spacing explicitly translates the chair.
+
+Open **Adjust backrest region** to set the hinge height, left/right mask edges and recline direction.
+Turn on **Show transformations** to inspect the cyan region and orange hinge line before editing.
+The controls are guided: the catalogue has object masks, not labelled chair-part masks, so the initial rectangle is
+an estimate and can include arms or miss part of the backrest. Side-view chairs give the clearest result.
+
+Implementation: `src/backrest.py` partitions the RGBA image into moving and fixed regions, shears and compresses only
+the backrest with `cv2.warpAffine`, and composites it over the unchanged base using premultiplied alpha.
+The hinge line stays fixed. At 180° a small projected thickness prevents a singular warp. The renderer preserves the
+base coordinates even when the moving backrest expands the cutout bounds. Spacing is still measured after deformation.
+There is no CLIP inference, segmentation, training, GPU request or 3D export in this editing callback.
+
+**Limit:** these values control a projected 2D deformation relative to the source photo. They are not recovered physical
+seat/back angles, a new viewpoint, or a mechanically accurate recliner simulation. Hidden surfaces cannot be recovered
+by this operation. The 3D view remains unchanged.
+
+Focused verification:
+```
+python scripts/check_backrest.py
+python scripts/check_backrest_render.py
+```
+The latter uses a real cached chair and saves 90°/135°/180° comparisons and measured CPU render timings in `results/backrest/`.
+
+## Historical whole-image rotation experiment (superseded UI)
+
+The following screenshots and measurements document the previous whole-cutout rotation feature, not the current
+backrest control. The generic rotation helper remains for the original demonstration scripts; it is not exposed as
+the chair-angle control in the app. Use the backrest checks above for the current feature.
 
 After **Build scene** the app keeps the chosen products in `gr.State`. The *2D geometric edits* panel then changes only the 2D picture and
 never calls CLIP, the harmony search, segmentation or the 3D export (`Apply 2D changes` runs only the operations below).

@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-from src.edit2d import affine_chain, opaque_bbox, rotate_rgba, solve_gap
+from src.edit2d import affine_chain, opaque_bbox, rotate_rgba, solve_gap, to3
+from src.backrest import recline_rgba
 from src.index import Index
 from src.palette import harmony_score, item_summary, lab2rgb, pair_score, rgb2lab
 
@@ -312,6 +313,26 @@ def _clamp(v, lo, hi):
     return (lo + hi) // 2 if lo > hi else min(max(v, lo), hi)
 
 
+def place_backrest_item(lib, idx, slot, room, room_key, config):
+    """Articulate only the backrest; preserve the original seat/legs canvas coordinates."""
+    it = place_item(lib, idx, slot, room, room_key, 0)
+    if slot['cat'] != 'chair':
+        raise ValueError('Backrest editing is available for chair slots only.')
+    cfg = {k: config.get(k, v) for k, v in dict(angle=90, hinge=55, left=0, right=100, direction='left').items()}
+    key = ('backrest', id(lib), int(idx), tuple(sorted(cfg.items())), slot['x'], slot['y'], room_key)
+    rgba, info = _remember(_LAYERS, key, lambda: recline_rgba(it['rgba'], **cfg), 64)
+    original_x, original_y = it['x0'], it['y0']
+    ox, oy = info['offset']
+    it.update(rgba=rgba, x0=original_x+ox, y0=original_y+oy, bbox_l=opaque_bbox(rgba[..., 3]), backrest=info)
+    source_local = it['M_net'].copy()
+    source_local[:, 2] -= [original_x, original_y]
+    T = np.array([[1., 0., it['x0']], [0., 1., it['y0']]])
+    it['M_backrest_net'] = (to3(T) @ to3(info['M_backrest']) @ to3(source_local))[:2]
+    box = bbox_canvas(it)
+    it['clipped'] = box[0] < 0 or box[1] < 0 or box[2] > W or box[3] > H
+    return it
+
+
 def bbox_canvas(it):
     b = it["bbox_l"]
     return it["x0"] + b[0], it["y0"] + b[1], it["x0"] + b[2], it["y0"] + b[3]
@@ -347,9 +368,12 @@ def render_scene(lib, ids, slots, seed=0, edits=None, overlay=False):
     Returns (PIL image, report). With edits=None the output equals the original renderer."""
     edits = edits or {}
     rots = edits.get("rot", {})
+    backrests = edits.get('backrest', {})
     room, room_key = get_room([lib.summ[i] for i in ids], seed)
     canvas = room.astype(np.float32).copy()
-    items = [place_item(lib, i, s, room, room_key, int(rots.get(j, 0))) for j, (i, s) in enumerate(zip(ids, slots))]
+    items = [place_backrest_item(lib, i, s, room, room_key, backrests[j]) if j in backrests
+             else place_item(lib, i, s, room, room_key, int(rots.get(j, 0)))
+             for j, (i, s) in enumerate(zip(ids, slots))]
 
     gap = None
     g = edits.get("gap")
@@ -358,9 +382,15 @@ def render_scene(lib, ids, slots, seed=0, edits=None, overlay=False):
         ba, bb = bbox_canvas(A), bbox_canvas(B)
         cur = (bb[0] - ba[2]) if (bb[0] + bb[2]) >= (ba[0] + ba[2]) else (ba[0] - bb[2])
         sol = solve_gap(ba, bb, cur if g.get("px") is None else g["px"], W)
+        if g.get('px') is None:
+            # A disabled spacing control must not move overlapping original items.
+            sol.update(dx=0, achieved=int(cur), exact=True)
         B["x0"] += sol["dx"]                                      # translate B horizontally, nothing else moves
         B["M_net"] = B["M_net"].copy()
         B["M_net"][0, 2] += sol["dx"]
+        if 'M_backrest_net' in B:
+            B['M_backrest_net'] = B['M_backrest_net'].copy()
+            B['M_backrest_net'][0, 2] += sol['dx']
         gap = dict(sol, a=g["a"], b=g["b"], applied=g.get("px") is not None)
 
     # draw order: rug (on the floor) -> wall art -> everything else back-to-front by foot position
@@ -375,19 +405,25 @@ def render_scene(lib, ids, slots, seed=0, edits=None, overlay=False):
     report = dict(labels=labels, gap=gap,
                   items=[dict(label=labels[j], cat=it["cat"], rot=it["rot"], bbox=bbox_canvas(it), M_net=it["M_net"],
                               M_rot=it["M_rot"], clamped=it["clamped"], oversize=it["oversize"], x0=it["x0"], y0=it["y0"],
-                              rgba=it["rgba"])
+                              rgba=it["rgba"], backrest=it.get('backrest'),
+                              M_backrest_net=it.get('M_backrest_net'), clipped=it.get('clipped', False))
                          for j, it in enumerate(items)])
     if overlay:
         img = draw_overlay(img, report)
     return img, report
 
 
-def gap_limits(lib, ids, slots, rots, a, b, seed=0):
+def gap_limits(lib, ids, slots, rots, a, b, seed=0, backrests=None):
     """Feasible horizontal gap range for the pair (a fixed, b moves) at the current rotations.
     Needs only the two cached layers, no painting."""
     room, key = get_room([lib.summ[i] for i in ids], seed)
     A = place_item(lib, ids[a], slots[a], room, key, int(rots.get(a, 0)))
     B = place_item(lib, ids[b], slots[b], room, key, int(rots.get(b, 0)))
+    backrests = backrests or {}
+    if a in backrests:
+        A = place_backrest_item(lib, ids[a], slots[a], room, key, backrests[a])
+    if b in backrests:
+        B = place_backrest_item(lib, ids[b], slots[b], room, key, backrests[b])
     ba, bb = bbox_canvas(A), bbox_canvas(B)
     cur = (bb[0] - ba[2]) if (bb[0] + bb[2]) >= (ba[0] + ba[2]) else (ba[0] - bb[2])
     return solve_gap(ba, bb, cur, W)
@@ -403,6 +439,8 @@ def draw_overlay(img, report):
         col = (230, 60, 60) if it["rot"] else (30, 150, 200)
         d.rectangle([x0, y0, x1 - 1, y1 - 1], outline=col, width=2)
         text = it["label"] + (f"  rot {it['rot']} deg" if it["rot"] else "")
+        if it.get('backrest'):
+            text = it['label'] + f"  backrest {it['backrest']['angle']:g} deg (2D)"
         d.rectangle([x0, max(0, y0 - 13), x0 + d.textlength(text) + 6, max(13, y0)], fill=col)
         d.text((x0 + 3, max(0, y0 - 13)), text, fill=(255, 255, 255))
     g = report["gap"]
@@ -425,7 +463,7 @@ def render(lib, ids, slots, seed=0):
     return render_scene(lib, ids, slots, seed)[0]
 
 
-def compare_strip(lib, ids, slots, j, rot, seed=0):
+def compare_strip(lib, ids, slots, j, rot=0, seed=0, backrest=None):
     """Original cut-out -> transformed cut-out on a checkerboard, with opaque bounding boxes."""
     from PIL import ImageDraw
     room, key = get_room([lib.summ[i] for i in ids], seed)
@@ -436,6 +474,14 @@ def compare_strip(lib, ids, slots, j, rot, seed=0):
     check = np.where(((yy // 12 + xx // 12) % 2)[..., None] == 0, 232, 205).astype(np.float32).repeat(3, axis=2)
     for k, (r, text) in enumerate(((0, "original cut-out"), (int(rot), f"after 2D rotation {int(rot)} deg"))):
         L = make_layer(lib, ids[j], slots[j], room, key, r)
+        region = None
+        if backrest is not None:
+            text = 'source / backrest region' if k == 0 else f"backrest {backrest['angle']:g} deg (2D)"
+            rgba, detail = recline_rgba(L['rgba'], **backrest)
+            if k == 0:
+                region = detail['region']
+            else:
+                L = dict(L, rgba=rgba, bbox=opaque_bbox(rgba[..., 3]))
         tile = check.copy()
         rgba = L["rgba"]
         s = (size - 24) / max(rgba.shape[:2])
@@ -447,6 +493,10 @@ def compare_strip(lib, ids, slots, j, rot, seed=0):
         out.paste(Image.fromarray(tile.astype(np.uint8)), (x0, 30))
         bx0, by0, bx1, by1 = [int(v * s) for v in L["bbox"]]
         d.rectangle([x0 + ox + bx0, 30 + oy + by0, x0 + ox + bx1 - 1, 30 + oy + by1 - 1], outline=(230, 60, 60), width=2)
+        if region is not None:
+            rx0, ry0, rx1, ry1 = [int(v*s) for v in region]
+            d.rectangle([x0+ox+rx0, 30+oy+ry0, x0+ox+rx1, 30+oy+ry1], outline=(0, 170, 200), width=2)
+            d.line([x0+ox+rx0, 30+oy+ry1, x0+ox+rx1, 30+oy+ry1], fill=(255, 170, 0), width=3)
         d.text((x0 + 4, 8), text, fill=(30, 30, 30))
     d.text((size + 12, 30 + size // 2 - 6), "->", fill=(30, 30, 30))
     return out

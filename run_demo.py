@@ -11,7 +11,7 @@ Stages (each prints what it does and how long it took; pictures go to results/de
   3  Descriptors          HSV histogram, HOG, LBP, k-means palette in LAB
   4  Retrieval + harmony  CLIP text -> top-K per slot -> best colour-harmonious set
   5  2D composition       placement rules, Reinhard colour match, shadows, alpha blending
-  6  2D geometric edits   affine rotation + horizontal spacing (measured)
+  6  2D geometric edits   backrest-only deformation + horizontal spacing (measured)
   7  3D export            proxy room as GLB
 """
 import argparse
@@ -162,10 +162,11 @@ img_on.save(OUT / "scene_harmony_on.png")
 img_off.save(OUT / "scene_harmony_off.png")
 
 # ------------------------------------------------------------------ stage 6: 2D geometric edits
-stage(6, "2D geometric edits (affine rotation + horizontal spacing), no model is called")
+stage(6, "2D geometric edits (guided backrest recline + spacing), no model is called")
 pair = C.default_pair(slots)
-rot_j = next((j for j, s in enumerate(slots) if s["cat"] == "chair"), 0)
-edits = {"rot": {rot_j: 90}}
+rot_j = next((j for j, s in enumerate(slots) if s["cat"] == "chair"), None)
+backrest = dict(angle=135, hinge=55, left=0, right=100, direction='left')
+edits = {'backrest': {rot_j: backrest}} if rot_j is not None else {}
 if pair:
     lim = C.gap_limits(lib, ids_on, slots, {}, *pair)
     want = min(lim["hi"], lim["current"] + 120) if lim["hi"] > 0 else 0
@@ -173,13 +174,18 @@ if pair:
 t = time.perf_counter()
 img_edit, rep2 = C.render_scene(lib, ids_on, slots, 0, edits, overlay=True)
 print(f"  edit applied in {took(t)} (layers cached from stage 5)", flush=True)
-print(f"  rotation: {labels[rot_j]} by 90 deg, matrix used by warpAffine:\n{np.array2string(rep2['items'][rot_j]['M_rot'], precision=3, suppress_small=True)}", flush=True)
+if rot_j is not None:
+    print(f"  backrest: {labels[rot_j]} 135 deg (2D reference), seat/legs fixed; matrix:\n"
+          f"{np.array2string(rep2['items'][rot_j]['backrest']['M_backrest'], precision=3, suppress_small=True)}", flush=True)
+else:
+    print('  This layout has no chair; backrest edit skipped.', flush=True)
 if pair and rep2["gap"]:
     g = rep2["gap"]
     print(f"  spacing: {labels[g['a']]} fixed, {labels[g['b']]} moved {g['side']}: requested {g['requested']} px, achieved {g['achieved']} px "
           f"(feasible 0..{g['hi']} px)", flush=True)
 img_edit.save(OUT / "scene_2d_edited_overlay.png")
-C.compare_strip(lib, ids_on, slots, rot_j, 90).save(OUT / "cutout_original_vs_rotated.png")
+if rot_j is not None:
+    C.compare_strip(lib, ids_on, slots, rot_j, backrest=backrest).save(OUT / 'cutout_backrest_135.png')
 
 # ------------------------------------------------------------------ stage 7: 3D
 stage(7, "3D export (proxy room, GLB)")
@@ -192,7 +198,7 @@ print("  (the 3D room is made of simple shapes coloured from the products; it is
 
 # ------------------------------------------------------------------ summary picture
 sheet = Image.new("RGB", (768 * 3 + 20, 512 + 30), "white")
-for k, (im, txt) in enumerate(((img_off, "harmony OFF"), (img_on, "harmony ON"), (img_edit, "2D edits: chair 90 deg + spacing"))):
+for k, (im, txt) in enumerate(((img_off, "harmony OFF"), (img_on, "harmony ON"), (img_edit, "2D edits: backrest 135 deg + spacing"))):
     sheet.paste(im, (k * 778, 30))
     ImageDraw.Draw(sheet).text((k * 778 + 6, 8), txt, fill=(0, 0, 0))
 sheet.save(OUT / "demo_summary.png")
