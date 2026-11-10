@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+from src.edit2d import affine_chain, opaque_bbox, rotate_rgba, solve_gap
 from src.index import Index
 from src.palette import harmony_score, item_summary, lab2rgb, pair_score, rgb2lab
 
@@ -233,41 +234,222 @@ PRIORS = {"sofa": ("w", .40), "chair": ("h", .36), "table": ("w", .26), "lamp": 
           "plant_vase": ("h", .20), "shelf": ("h", .46), "wall_art": ("w", .17)}
 
 
-def place(canvas, lib, idx, slot, room):
-    """Scale, colour-match, shadow and blend ONE item according to its category rules."""
+# Small caches so that 2D edits (spacing / rotation) re-use the room and the colour-matched layers.
+_ROOMS, _LAYERS = {}, {}
+
+
+def _remember(cache, key, make, limit):
+    """Tiny FIFO cache: keeps memory small on the free Space."""
+    if key not in cache:
+        if len(cache) >= limit:
+            cache.pop(next(iter(cache)))
+        cache[key] = make()
+    return cache[key]
+
+
+def get_room(items_summ, seed=0):
+    tint = wall_tint(items_summ)
+    key = (float(tint[0]), float(tint[1]), seed)
+    return _remember(_ROOMS, key, lambda: make_room(tint, seed), 6), key
+
+
+def make_layer(lib, idx, slot, room, room_key, rot=0):
+    """Colour-matched, scaled (and optionally rotated) RGBA layer of ONE product.
+    Always starts from the cached SOURCE cut-out, never from an earlier transformed layer, so repeated
+    edits cannot accumulate interpolation damage. rot is a 2D image-plane rotation in degrees."""
     cat = slot["cat"]
-    rgba = reinhard(lib.cutout(idx), room)
-    if cat == "chair" and slot["x"] > 0.6:
-        rgba = rgba[:, ::-1]                                           # chairs face the room centre
-    dim, frac = PRIORS[cat]
-    h0, w0 = rgba.shape[:2]
-    s = (frac * (W if dim == "w" else H)) / (w0 if dim == "w" else h0)
-    s *= 0.85 + 0.15 * (slot["y"] / 0.9)                               # farther (higher in image) = a bit smaller
-    w, h = max(2, int(w0 * s)), max(2, int(h0 * s))
-    if cat == "rug":
-        h = int(h * 0.35)                                              # a rug on the floor, seen at an angle, looks squashed
-    rgba = np.ascontiguousarray(cv2.resize(rgba, (w, h), interpolation=cv2.INTER_AREA))
-    x0 = int(slot["x"] * W - w / 2)
-    if cat == "wall_art":
-        y0, kind = int(slot["y"] * H - h / 2), "wall"
-    elif cat == "rug":
-        y0, kind = int(slot["y"] * H - h), "rug"
+    flip = cat == "chair" and slot["x"] > 0.6                            # chairs face the room centre
+    key = (id(lib), int(idx), cat, flip, round(float(slot["y"]), 4), int(rot), room_key)
+
+    def build():
+        rgba = reinhard(lib.cutout(idx), room)
+        if flip:
+            rgba = rgba[:, ::-1]
+        dim, frac = PRIORS[cat]
+        h0, w0 = rgba.shape[:2]
+        s = (frac * (W if dim == "w" else H)) / (w0 if dim == "w" else h0)
+        s *= 0.85 + 0.15 * (slot["y"] / 0.9)                             # farther (higher in image) = a bit smaller
+        w, h = max(2, int(w0 * s)), max(2, int(h0 * s))
+        if cat == "rug":
+            h = int(h * 0.35)                                            # a rug on the floor, seen at an angle, looks squashed
+        rgba = np.ascontiguousarray(cv2.resize(rgba, (w, h), interpolation=cv2.INTER_AREA))
+        M_rot = None
+        if int(rot) % 360:
+            rgba, M_rot = rotate_rgba(rgba, rot)                         # affine rotation, premultiplied alpha
+        return dict(rgba=rgba, bbox=opaque_bbox(rgba[..., 3]), flip=flip, src_size=(w0, h0), scaled=(w, h),
+                    M_rot=M_rot, rot=int(rot))
+    return _remember(_LAYERS, key, build, 64)
+
+
+def place_item(lib, idx, slot, room, room_key, rot=0):
+    """Where does ONE layer go? Unrotated items use the original rule (so default output is unchanged);
+    rotated items are grounded by their opaque bounding box and kept inside the canvas."""
+    L = make_layer(lib, idx, slot, room, room_key, rot)
+    rgba, cat = L["rgba"], slot["cat"]
+    h, w = rgba.shape[:2]
+    bx0, by0, bx1, by1 = L["bbox"]
+    clamped = oversize = False
+    if int(rot) % 360 == 0:
+        x0 = int(slot["x"] * W - w / 2)
+        y0 = int(slot["y"] * H - h / 2) if cat == "wall_art" else int(slot["y"] * H - h)
+        base = y0 + h
     else:
-        y0, kind = int(slot["y"] * H - h), "floor"
-    if kind != "rug":
-        drop_shadow(canvas, rgba[..., 3], x0, y0 + h, kind)
-    blend(canvas, rgba, x0, y0)
+        x0 = int(round(slot["x"] * W - (bx0 + bx1) / 2))
+        y0 = (int(round(slot["y"] * H - (by0 + by1) / 2)) if cat == "wall_art" else int(slot["y"] * H) - by1)
+        cx, cy = _clamp(x0, -bx0, W - bx1), _clamp(y0, -by0, H - by1)  # keep the opaque box on the canvas
+        clamped = (cx, cy) != (x0, y0)
+        oversize = (W - bx1) < -bx0 or (H - by1) < -by0                # rotated box larger than the canvas itself
+        x0, y0 = cx, cy
+        base = y0 + h if cat == "wall_art" else y0 + by1
+    kind = "wall" if cat == "wall_art" else ("rug" if cat == "rug" else "floor")
+    M = affine_chain(L["src_size"], L["flip"], L["scaled"], L["M_rot"], (x0, y0))
+    return dict(rgba=rgba, x0=x0, y0=y0, base=base, kind=kind, cat=cat, bbox_l=L["bbox"], rot=int(rot),
+                M_net=M, M_rot=L["M_rot"], clamped=clamped, oversize=oversize, idx=int(idx))
 
 
-def render(lib, ids, slots, seed=0):
-    """Compose the scene image from chosen item ids."""
-    room = make_room(wall_tint([lib.summ[i] for i in ids]), seed)
+def _clamp(v, lo, hi):
+    """Clamp v to [lo, hi]. lo > hi means the object is bigger than the canvas on this axis: centre it."""
+    return (lo + hi) // 2 if lo > hi else min(max(v, lo), hi)
+
+
+def bbox_canvas(it):
+    b = it["bbox_l"]
+    return it["x0"] + b[0], it["y0"] + b[1], it["x0"] + b[2], it["y0"] + b[3]
+
+
+CAT_NAMES = {"sofa": "Sofa", "chair": "Chair", "table": "Table", "lamp": "Lamp", "rug": "Rug",
+             "plant_vase": "Plant/vase", "shelf": "Shelf", "wall_art": "Wall art"}
+
+
+def slot_labels(slots):
+    """'Chair 1', 'Chair 2' for repeated categories, plain 'Lamp' when the category occurs once."""
+    total = {}
+    for s in slots:
+        total[s["cat"]] = total.get(s["cat"], 0) + 1
+    seen, out = {}, []
+    for s in slots:
+        seen[s["cat"]] = seen.get(s["cat"], 0) + 1
+        out.append(CAT_NAMES[s["cat"]] + (f" {seen[s['cat']]}" if total[s["cat"]] > 1 else ""))
+    return out
+
+
+def default_pair(slots):
+    """Shelf + lamp when both exist ("rack" = shelf category); else the first two floor objects; else None."""
+    cats = [s["cat"] for s in slots]
+    if "shelf" in cats and "lamp" in cats:
+        return cats.index("shelf"), cats.index("lamp")
+    other = [j for j, c in enumerate(cats) if c not in ("rug", "wall_art")] or list(range(len(cats)))
+    return (other[0], other[1]) if len(other) >= 2 else None
+
+
+def render_scene(lib, ids, slots, seed=0, edits=None, overlay=False):
+    """Compose the scene. edits = {"rot": {slot_index: degrees}, "gap": {"a": i, "b": j, "px": int or None}}.
+    Returns (PIL image, report). With edits=None the output equals the original renderer."""
+    edits = edits or {}
+    rots = edits.get("rot", {})
+    room, room_key = get_room([lib.summ[i] for i in ids], seed)
     canvas = room.astype(np.float32).copy()
+    items = [place_item(lib, i, s, room, room_key, int(rots.get(j, 0))) for j, (i, s) in enumerate(zip(ids, slots))]
+
+    gap = None
+    g = edits.get("gap")
+    if g and g.get("a") is not None and g.get("b") is not None and g["a"] != g["b"] and max(g["a"], g["b"]) < len(items):
+        A, B = items[g["a"]], items[g["b"]]
+        ba, bb = bbox_canvas(A), bbox_canvas(B)
+        cur = (bb[0] - ba[2]) if (bb[0] + bb[2]) >= (ba[0] + ba[2]) else (ba[0] - bb[2])
+        sol = solve_gap(ba, bb, cur if g.get("px") is None else g["px"], W)
+        B["x0"] += sol["dx"]                                      # translate B horizontally, nothing else moves
+        B["M_net"] = B["M_net"].copy()
+        B["M_net"][0, 2] += sol["dx"]
+        gap = dict(sol, a=g["a"], b=g["b"], applied=g.get("px") is not None)
+
     # draw order: rug (on the floor) -> wall art -> everything else back-to-front by foot position
     order = sorted(range(len(slots)), key=lambda j: (slots[j]["cat"] != "rug", slots[j]["cat"] != "wall_art", slots[j]["y"]))
     for j in order:
-        place(canvas, lib, ids[j], slots[j], room)
-    return Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8))
+        it = items[j]
+        if it["kind"] != "rug":
+            drop_shadow(canvas, it["rgba"][..., 3], it["x0"], it["base"], it["kind"])   # shadow from the (transformed) alpha
+        blend(canvas, it["rgba"], it["x0"], it["y0"])
+    img = Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8))
+    labels = slot_labels(slots)
+    report = dict(labels=labels, gap=gap,
+                  items=[dict(label=labels[j], cat=it["cat"], rot=it["rot"], bbox=bbox_canvas(it), M_net=it["M_net"],
+                              M_rot=it["M_rot"], clamped=it["clamped"], oversize=it["oversize"], x0=it["x0"], y0=it["y0"],
+                              rgba=it["rgba"])
+                         for j, it in enumerate(items)])
+    if overlay:
+        img = draw_overlay(img, report)
+    return img, report
+
+
+def gap_limits(lib, ids, slots, rots, a, b, seed=0):
+    """Feasible horizontal gap range for the pair (a fixed, b moves) at the current rotations.
+    Needs only the two cached layers, no painting."""
+    room, key = get_room([lib.summ[i] for i in ids], seed)
+    A = place_item(lib, ids[a], slots[a], room, key, int(rots.get(a, 0)))
+    B = place_item(lib, ids[b], slots[b], room, key, int(rots.get(b, 0)))
+    ba, bb = bbox_canvas(A), bbox_canvas(B)
+    cur = (bb[0] - ba[2]) if (bb[0] + bb[2]) >= (ba[0] + ba[2]) else (ba[0] - bb[2])
+    return solve_gap(ba, bb, cur, W)
+
+
+def draw_overlay(img, report):
+    """'Show transformations': opaque bounding boxes, rotation angles and the horizontal gap measurement."""
+    from PIL import ImageDraw
+    img = img.copy()
+    d = ImageDraw.Draw(img)
+    for it in report["items"]:
+        x0, y0, x1, y1 = it["bbox"]
+        col = (230, 60, 60) if it["rot"] else (30, 150, 200)
+        d.rectangle([x0, y0, x1 - 1, y1 - 1], outline=col, width=2)
+        text = it["label"] + (f"  rot {it['rot']} deg" if it["rot"] else "")
+        d.rectangle([x0, max(0, y0 - 13), x0 + d.textlength(text) + 6, max(13, y0)], fill=col)
+        d.text((x0 + 3, max(0, y0 - 13)), text, fill=(255, 255, 255))
+    g = report["gap"]
+    if g:
+        A, B = report["items"][g["a"]]["bbox"], report["items"][g["b"]]["bbox"]
+        xa, xb = (A[2], B[0]) if g["side"] == "right" else (B[2], A[0])
+        lo, hi = max(A[1], B[1]), min(A[3], B[3])
+        y = int((lo + hi) / 2) if hi > lo else int((B[1] + B[3]) / 2)
+        d.line([xa, y, xb, y], fill=(250, 200, 0), width=3)
+        for x in (xa, xb):
+            d.line([x, y - 8, x, y + 8], fill=(250, 200, 0), width=3)
+        txt = f"gap {g['achieved']} px" + ("" if g["exact"] else f" (asked {g['requested']})")
+        d.rectangle([min(xa, xb), y - 22, min(xa, xb) + d.textlength(txt) + 8, y - 8], fill=(40, 40, 40))
+        d.text((min(xa, xb) + 4, y - 21), txt, fill=(250, 200, 0))
+    return img
+
+
+def render(lib, ids, slots, seed=0):
+    """Compose the scene image from chosen item ids (no 2D edits)."""
+    return render_scene(lib, ids, slots, seed)[0]
+
+
+def compare_strip(lib, ids, slots, j, rot, seed=0):
+    """Original cut-out -> transformed cut-out on a checkerboard, with opaque bounding boxes."""
+    from PIL import ImageDraw
+    room, key = get_room([lib.summ[i] for i in ids], seed)
+    size = 230
+    out = Image.new("RGB", (size * 2 + 40, size + 34), (245, 245, 242))
+    d = ImageDraw.Draw(out)
+    yy, xx = np.mgrid[0:size, 0:size]
+    check = np.where(((yy // 12 + xx // 12) % 2)[..., None] == 0, 232, 205).astype(np.float32).repeat(3, axis=2)
+    for k, (r, text) in enumerate(((0, "original cut-out"), (int(rot), f"after 2D rotation {int(rot)} deg"))):
+        L = make_layer(lib, ids[j], slots[j], room, key, r)
+        tile = check.copy()
+        rgba = L["rgba"]
+        s = (size - 24) / max(rgba.shape[:2])
+        sm = cv2.resize(rgba, (max(1, int(rgba.shape[1] * s)), max(1, int(rgba.shape[0] * s))), interpolation=cv2.INTER_AREA)
+        oy, ox = (size - sm.shape[0]) // 2, (size - sm.shape[1]) // 2
+        a = sm[..., 3:] / 255.0
+        tile[oy:oy + sm.shape[0], ox:ox + sm.shape[1]] = sm[..., :3] * a + tile[oy:oy + sm.shape[0], ox:ox + sm.shape[1]] * (1 - a)
+        x0 = k * (size + 40)
+        out.paste(Image.fromarray(tile.astype(np.uint8)), (x0, 30))
+        bx0, by0, bx1, by1 = [int(v * s) for v in L["bbox"]]
+        d.rectangle([x0 + ox + bx0, 30 + oy + by0, x0 + ox + bx1 - 1, 30 + oy + by1 - 1], outline=(230, 60, 60), width=2)
+        d.text((x0 + 4, 8), text, fill=(30, 30, 30))
+    d.text((size + 12, 30 + size // 2 - 6), "->", fill=(30, 30, 30))
+    return out
 
 
 def compose(lib, prompt, harmony=True, K=8, seed=0):

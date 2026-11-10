@@ -17,7 +17,7 @@ out.mkdir(parents=True, exist_ok=True)
 rows = []
 for j, prompt in enumerate(['cozy reading corner', 'modern living room', 'minimalist home office']):
     result = app.run(prompt, True)
-    selected, cards, message, glb, off, on = result
+    selected, cards, message, glb, off, on = result[:6]   # run() also returns the 2D-edit state/controls
     selected.save(out / f'scene_{j+1}.png')
     pair = Image.new('RGB', (1536, 552), 'white')
     pair.paste(off, (0, 40)); pair.paste(on, (768, 40))
