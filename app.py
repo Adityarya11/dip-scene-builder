@@ -26,7 +26,7 @@ LIB = Library(os.environ.get("ART_DIR", "artifacts"), clip=load_clip("cpu"))
 print(f"ready in {time.time() - t0:.1f}s, {len(LIB.meta)} products")
 
 EXAMPLES = ["cozy reading corner", "modern living room", "minimalist home office",
-            "rustic dining room", "bright bedroom", "elegant entryway"]
+            "rustic dining room", "warm lounge", "elegant entryway"]
 
 @gpu_decorator
 def run(prompt, harmony):
