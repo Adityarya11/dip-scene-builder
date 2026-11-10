@@ -1,12 +1,12 @@
 {
   "ndcg10_image_query": {
-    "hsv": 0.3406630195774635,
-    "hog": 0.675185611660777,
-    "lbp": 0.6958255003825501,
-    "clip": 0.8558497139585834
+    "hsv": 0.34068612341794596,
+    "hog": 0.6397362462964196,
+    "lbp": 0.6893881646482929,
+    "clip": 0.8448989078779335
   },
   "ndcg10_clip_text_query": {
-    "mean": 0.9031384010289885,
+    "mean": 0.8971752191650202,
     "chair": 1.0,
     "lamp": 1.0,
     "plant_vase": 0.77990823370192,
@@ -14,29 +14,11 @@
     "shelf": 1.0,
     "sofa": 1.0,
     "table": 1.0,
-    "wall_art": 0.4451989745299882
+    "wall_art": 0.39749351961824186
   },
-  "scenes": {
-    "per_setting_mean": {
-      "off": {
-        "compat": 0.9139085731479176,
-        "hue_spread_deg": 17.02116267497723,
-        "clip_relevance": 0.307092737693053,
-        "seconds": 0.48244126026447004
-      },
-      "on": {
-        "compat": 0.9497222747422349,
-        "hue_spread_deg": 10.84965467453003,
-        "clip_relevance": 0.30646544007154614,
-        "seconds": 0.6841159050281231
-      }
-    },
-    "n_prompts": 13,
-    "median_seconds_per_scene": 0.5122140645980835
-  },
-  "n_items": 1485,
+  "n_items": 1520,
   "segmentation": {
-    "mean_iou_classical_vs_rembg": 0.6717469683175463,
+    "mean_iou_classical_vs_rembg": 0.6573464934871388,
     "note": "rembg is pseudo ground truth"
   }
 }

@@ -80,7 +80,13 @@ class Library:
         # quality filter: if the two segmenters disagree (IoU < 0.3) the cut-out is probably bad -> never use it in a scene
         # (wall art uses a rectangle mask instead, so it is exempt)
         iou = self.meta.get("iou_classical_vs_rembg", pd.Series(1.0, index=self.meta.index)).values
-        self.ok = (iou >= 0.3) | (self.cat == "wall_art")
+        quality_ok = (iou >= 0.3) | (self.cat == "wall_art")
+
+        cutout_exists = np.array([
+            (self.art / "cutouts" / f"{image_id}.webp").is_file()
+            for image_id in self.meta.image_id
+        ])
+        self.ok = quality_ok & cutout_exists
         self.clip, self._cache = clip, {}
 
     def encode(self, texts):

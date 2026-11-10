@@ -3,9 +3,17 @@ Loads precomputed artifacts (CLIP image embeddings, cut-outs, palettes) + the CL
 import os
 import time
 import gradio as gr
-
+from src.scene3d import export_scene3d
 from src.compose import Library, SCENES, compose, item_card
 from src.features import load_clip
+
+import os
+
+if os.environ.get("SPACE_ID"):
+    import spaces
+    gpu_decorator = spaces.GPU
+else:
+    gpu_decorator = lambda func: func
 
 t0 = time.time()
 LIB = Library(os.environ.get("ART_DIR", "artifacts"), clip=load_clip("cpu"))
@@ -14,14 +22,15 @@ print(f"ready in {time.time() - t0:.1f}s, {len(LIB.meta)} products")
 EXAMPLES = ["cozy reading corner", "modern living room", "minimalist home office",
             "rustic dining room", "bright bedroom", "elegant entryway"]
 
-
+@gpu_decorator
 def run(prompt, harmony):
     r = compose(LIB, prompt or "living room", harmony)
+    glb_path = export_scene3d(LIB, r)
     cards = [(item_card(LIB, i), f"{s['q']}: {LIB.meta.caption[i][:70]}") for i, s in zip(r["ids"], r["slots"])]
     info = (f"Scene template: **{r['scene']}**  |  style words: *{r['style'] or '-'}*  |  "
             f"colour-harmony score: **{r['harmony']:.2f}** ({'harmony ON' if harmony else 'harmony OFF'})  |  "
             f"built in {r['seconds']:.2f}s")
-    return r["image"], cards, info
+    return r["image"], cards, info, glb_path
 
 
 with gr.Blocks(title="AI-Assisted Commerce Scene Builder") as demo:
@@ -37,8 +46,15 @@ with gr.Blocks(title="AI-Assisted Commerce Scene Builder") as demo:
     info = gr.Markdown()
     out = gr.Image(label="Composed scene", type="pil")
     gal = gr.Gallery(label="Retrieved items + dominant-colour palettes", columns=5, height="auto")
-    btn.click(run, [prompt, harmony], [out, gal, info])
-    prompt.submit(run, [prompt, harmony], [out, gal, info])
+    out3d = gr.Model3D(
+    label="Interactive 3D Room",
+    display_mode="solid",
+    height=550,
+    camera_position=(45, 65, 11),
+    clear_color=(0.93, 0.93, 0.95, 1.0)
+    )
+    btn.click(run, [prompt, harmony], [out, gal, info, out3d])
+    prompt.submit(run, [prompt, harmony], [out, gal, info, out3d])
 
 if __name__ == "__main__":
     demo.launch()

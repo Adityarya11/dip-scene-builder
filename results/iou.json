@@ -1,16 +1,16 @@
 {
-  "n": 1485,
-  "mean_iou": 0.6717469683175463,
+  "n": 1520,
+  "mean_iou": 0.657346493487139,
   "mean_iou_per_category": {
-    "chair": 0.7938,
+    "chair": 0.7324,
     "lamp": 0.6787,
     "plant_vase": 0.7572,
     "rug": 0.3166,
     "shelf": 0.6864,
-    "sofa": 0.8703,
+    "sofa": 0.7863,
     "table": 0.7368,
     "wall_art": 0.5642
   },
-  "grabcut_fallback_fraction": 0.1164983164983165,
+  "grabcut_fallback_fraction": 0.13026315789473683,
   "note": "rembg (U2-Net) is PSEUDO ground truth, not human-annotated"
 }
