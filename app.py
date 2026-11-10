@@ -23,13 +23,19 @@ from src.features import load_clip
 cv2.setNumThreads(1)
 torch.set_num_threads(2)
 
-# This existing Space is configured as ZeroGPU: its startup validator requires
-# at least one decorated callback even though this small model runs on CPU.
+# This existing Space requires a registered ZeroGPU function at startup.
+# Build/edit paths use CPU only and must not allocate a GPU or consume its quota.
 if os.environ.get("SPACE_ID"):
     import spaces
     gpu_decorator = spaces.GPU
 else:
     gpu_decorator = lambda func: func
+
+
+@gpu_decorator
+def _reserved_gpu_backend():
+    """Startup compatibility only; never called by the CPU scene/editor callbacks."""
+    return None
 
 t0 = time.time()
 LIB = Library(os.environ.get("ART_DIR", "artifacts"), clip=load_clip("cpu"))
@@ -40,7 +46,6 @@ EXAMPLES = ["cozy reading corner", "modern living room", "minimalist home office
 
 
 # ---------------------------------------------------------------- heavy stage: build the scene once
-@gpu_decorator
 def run(prompt, harmony):
     started = time.time()
     on = compose(LIB, prompt or "living room", True)
