@@ -9,7 +9,7 @@ python_version: "3.11"
 app_file: app.py
 pinned: false
 license: mit
-short_description: Text prompt to a composed 2.5D room scene from product images
+short_description: DIP room composition with backrest and spacing controls
 ---
 
 # Digital Image Processing demonstration: composing a room from catalogue photos
@@ -53,7 +53,51 @@ Source: *Digital Image Processing 3-0-2, Course Structure 2026-27* (Gonzalez and
 Labs that line up with this project: 2 (histograms), 3 (filtering), 6 (colour), 7 (morphology), 8 (features), 9 (segmentation), 10 (classical ML), 11 (CNN), 12 (ViT).
 The syllabus labs 1-10 are MATLAB; this project uses Python with OpenCV, scikit-image and scikit-learn, which the syllabus lists as references.
 
-## Interactive 2D geometric transformations (the DIP work you can touch)
+## Chair backrest editing (current app)
+
+The current editor changes a **selected backrest region**, not the orientation of the whole chair picture.
+Build a reading corner, home office or dining room, select a chair, choose **90° / 135° / 180°** (or an intermediate preset),
+then click **Apply changes**. 90° restores the original photo. The seat and legs below the hinge keep their original
+pixels and canvas position, unless spacing explicitly translates the chair.
+
+Open **Adjust backrest region** to set the hinge height, left/right mask edges and recline direction.
+The default **outward** direction accounts for the chair's horizontal flip: an office chair on the right leans right,
+away from the desk. **Inward** reverses this; explicit left/right overrides are available for photos with another viewpoint.
+Turn on **Show transformations** to inspect the cyan region and orange hinge line before editing.
+The controls are guided: the catalogue has object masks, not labelled chair-part masks, so the initial rectangle is
+an estimate and can include arms or miss part of the backrest. Side-view chairs give the clearest result.
+
+Implementation: `src/backrest.py` partitions the RGBA image into moving and fixed regions, shears and compresses only
+the backrest with `cv2.warpAffine`, and composites it over the unchanged base using premultiplied alpha.
+The hinge line stays fixed. At 180° a small projected thickness prevents a singular warp. The renderer preserves the
+base coordinates even when the moving backrest expands the cutout bounds. Spacing is still measured after deformation.
+There is no CLIP inference, segmentation, training or GPU request in this editing callback.
+
+The same angle also articulates the **3D proxy backrest and headrest** around a seat/back hinge. Seat, legs and arms stay
+fixed. A small GLB is regenerated only when angle/direction changes; spacing, overlays and mask adjustments reuse it.
+Reset restores both the image and upright 3D pose. This is procedural proxy geometry, not reconstructed product geometry.
+
+Desk lamps now use a small tabletop-specific size and anchor; floor lamps keep a taller, width-limited size.
+
+**Limit:** these values control a projected 2D deformation relative to the source photo. They are not recovered physical
+seat/back angles, a new viewpoint, or a mechanically accurate recliner simulation. Hidden surfaces cannot be recovered
+by this operation. The 3D mesh has an explicit geometric hinge but is still a simplified category proxy.
+
+Focused verification:
+```
+python scripts/check_backrest.py
+python scripts/check_backrest_render.py
+python scripts/check_visual_fixes.py
+python scripts/check_3d_recline.py
+```
+`check_backrest_render.py` saves real-chair comparisons and CPU render timings in `results/backrest/`.
+The visual/3D checks save the corrected office scene and articulated GLBs in `results/backrest_sync/`.
+
+## Historical whole-image rotation experiment (superseded UI)
+
+The following screenshots and measurements document the previous whole-cutout rotation feature, not the current
+backrest control. The generic rotation helper remains for the original demonstration scripts; it is not exposed as
+the chair-angle control in the app. Use the backrest checks above for the current feature.
 
 After **Build scene** the app keeps the chosen products in `gr.State`. The *2D geometric edits* panel then changes only the 2D picture and
 never calls CLIP, the harmony search, segmentation or the 3D export (`Apply 2D changes` runs only the operations below).

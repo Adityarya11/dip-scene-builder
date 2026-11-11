@@ -9,6 +9,7 @@ import tempfile
 import numpy as np
 import colorsys
 import trimesh
+from src.backrest import resolve_direction
 
 
 def _mix(a, b, amount):
@@ -77,6 +78,8 @@ def export_scene3d(lib, result, output_path=None):
     product_ids = [str(lib.meta.iloc[i]['image_id']) for i in product_indices]
     # A numeric harmony score is not the harmony-enabled selection flag.
     harmony_enabled = result.get('harmony_enabled')
+    backrests = result.get('backrest', {})
+    poses_metadata = []
     scene.metadata.update({
         'representation': 'category-based product-coloured proxies; not product reconstructions',
         'scene': template,
@@ -84,7 +87,8 @@ def export_scene3d(lib, result, output_path=None):
         'product_indices': product_indices,
         'categories': [slot['cat'] for slot in result['slots']],
         'harmony_enabled': None if harmony_enabled is None else bool(harmony_enabled),
-        'layout_version': 2,
+        'layout_version': 3,
+        'chair_backrests': poses_metadata,
     })
     item_transform = np.eye(4)
 
@@ -94,9 +98,12 @@ def export_scene3d(lib, result, output_path=None):
             a = np.array([170., 150., 130.])
         return np.r_[np.clip(a * shade, 0, 255).astype('uint8'), 255]
 
-    def box(name, size, pos, rgb, shade=1):
+    def box(name, size, pos, rgb, shade=1, hinge=None, recline=0):
         mesh = trimesh.creation.box(extents=size)
         mesh.apply_translation(pos)
+        if hinge is not None:
+            # Local +Y is behind the chair. Tilt rearwards/down before chair yaw.
+            mesh.apply_transform(trimesh.transformations.rotation_matrix(-recline, [1, 0, 0], hinge))
         mesh.apply_transform(item_transform)
         mesh.visual.face_colors = rgba(rgb, shade)
         scene.add_geometry(mesh, node_name=name)
@@ -158,7 +165,7 @@ def export_scene3d(lib, result, output_path=None):
     }
     positions = layouts.get(template, layouts['living room'])
     counts = {}
-    for index, slot in zip(result['ids'], result['slots']):
+    for slot_index, (index, slot) in enumerate(zip(result['ids'], result['slots'])):
         cat = slot['cat']
         count = counts.get(cat, 0)
         counts[cat] = count + 1
@@ -170,6 +177,18 @@ def export_scene3d(lib, result, output_path=None):
         item_transform = trimesh.transformations.rotation_matrix(angle, [0, 0, 1], [x, y, 0])
         rgb, secondary, light, dark, accent = _product_colors(lib, index)
         name = f'{cat}_{count}'
+        chair_angle, recline = 90., 0.
+        if cat == 'chair':
+            cfg = backrests.get(slot_index, backrests.get(str(slot_index), {}))
+            chair_angle = float(cfg.get('angle', 90))
+            if not 90 <= chair_angle <= 180:
+                raise ValueError('Chair backrest angle must be between 90 and 180 degrees.')
+            direction = cfg.get('direction', 'outward')
+            flipped = slot['x'] > .6
+            outward = resolve_direction('outward', flipped)
+            sign = 1 if resolve_direction(direction, flipped) == outward else -1
+            recline = sign*np.deg2rad(chair_angle-90)
+            poses_metadata.append(dict(slot=slot_index, angle=chair_angle, direction=direction))
         if __import__('os').environ.get('DIP_DEBUG_PALETTES') == '1':
             print(f'[3D palette] {name} product_index={index} primary={rgb.astype(int).tolist()} secondary={secondary.astype(int).tolist()}')
 
@@ -189,7 +208,9 @@ def export_scene3d(lib, result, output_path=None):
                         box(f'{name}_leg_{sx}_{sy}', (.065, .065, .44),
                             (x+sx*.24, y+sy*.23, .22), dark)
                 box(name+'_seat', (.62, .62, .12), (x, y, .50), rgb)
-                box(name+'_back', (.62, .10, .58), (x, y+.27, .83), secondary)
+                hinge = (x, y+.27, .54)
+                box(name+'_back', (.62, .10, .58), (x, y+.27, .83), secondary, hinge=hinge, recline=recline)
+                box(name+'_headrest', (.50, .14, .17), (x, y+.27, 1.205), rgb, hinge=hinge, recline=recline)
                 continue
             w = 2.05 if cat == 'sofa' else 1.06
             d = .98
@@ -200,8 +221,11 @@ def export_scene3d(lib, result, output_path=None):
                         (x + sx*(w/2-.17), y + sy*.33, .215), dark)
             box(name+'_seat_base', (w, d, .22), (x, y, .55), secondary)
             box(name+'_seat_cushion', (w-.16, d-.12, .18), (x, y-.035, .74), rgb)
-            box(name+'_back', (w, .20, 1.08), (x, y+.39, 1.18), secondary)
-            box(name+'_back_cushion', (w-.17, .16, .73), (x, y+.25, 1.18), rgb)
+            hinge = (x, y+.39, .64) if cat == 'chair' else None
+            box(name+'_back', (w, .20, 1.08), (x, y+.39, 1.18), secondary, hinge=hinge, recline=recline)
+            box(name+'_back_cushion', (w-.17, .16, .73), (x, y+.25, 1.18), rgb, hinge=hinge, recline=recline)
+            if cat == 'chair':
+                box(name+'_headrest', (w-.16, .22, .20), (x, y+.39, 1.82), rgb, hinge=hinge, recline=recline)
             for side in (-1, 1):
                 box(f'{name}_arm_{side}', (.16, .95, .47),
                     (x+side*(w/2-.08), y, .86), secondary)
