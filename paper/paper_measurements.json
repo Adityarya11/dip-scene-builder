@@ -1,0 +1,91 @@
+{
+ "shelf_lamp": {
+  "limits": {
+   "lo": 0,
+   "hi": 539,
+   "current": 350
+  },
+  "rows": [
+   {
+    "requested": 60,
+    "reported": 60,
+    "measured": 60,
+    "exact": true
+   },
+   {
+    "requested": 240,
+    "reported": 240,
+    "measured": 240,
+    "exact": true
+   },
+   {
+    "requested": 700,
+    "reported": 539,
+    "measured": 539,
+    "exact": false
+   }
+  ]
+ },
+ "pairs_all_classes": {
+  "n": 56,
+  "measured_equals_reported": 56
+ },
+ "backrest": [
+  {
+   "angle": 90,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 1.0,
+   "inside_canvas": true
+  },
+  {
+   "angle": 105,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 0.978,
+   "inside_canvas": true
+  },
+  {
+   "angle": 120,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 0.924,
+   "inside_canvas": true
+  },
+  {
+   "angle": 135,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 0.838,
+   "inside_canvas": true
+  },
+  {
+   "angle": 150,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 0.724,
+   "inside_canvas": true
+  },
+  {
+   "angle": 165,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 0.589,
+   "inside_canvas": true
+  },
+  {
+   "angle": 180,
+   "moving_pixels": 7808,
+   "lower_body_identical": true,
+   "bbox_h_ratio": 0.47,
+   "inside_canvas": true
+  }
+ ],
+ "backrest_back_to_90_identical": true,
+ "latency_ms": {
+  "render_with_backrest_cold_median": 281.9,
+  "cold_max": 325.4,
+  "render_with_backrest_warm_median": 20.8,
+  "glb_export_median_approx": 69.1
+ }
+}
